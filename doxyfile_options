@@ -32,7 +32,7 @@ DOXYFILE_ENCODING      = UTF-8
 # title of most generated pages and in a few other places.
 # The default value is: My Project.
 
-PROJECT_NAME           = "My Project"
+PROJECT_NAME           = "Mbed OS Reference"
 
 # The PROJECT_NUMBER tag can be used to enter a project or revision number. This
 # could be handy for archiving the generated documentation or if some version
@@ -837,16 +837,19 @@ EXCLUDE_SYMLINKS       = YES
 # exclude all test directories for example use the pattern */test/*
 
 EXCLUDE_PATTERNS       = */tools/* \
-                         */TESTS/* \
                          */targets/* \
                          */BUILD/* \
-                         */rtos/rtx* \
+                         */rtos/TARGET_CORTEX/rtx* \
                          */cmsis/* \
-                         */FEATURE_* \
                          */features/mbedtls/* \
                          */features/storage/* \
                          */features/unsupported/* \
-                         */features/filesystem/* \
+                         */features/FEATURE_COMMON_PAL/* \
+                         */features/FEATURE_LWIP/* \
+                         */features/FEATURE_UVISOR/* \
+                         */features/nanostack/* \
+                         */ble/generic/* \
+                         */ble/pal/*
 
 # The EXCLUDE_SYMBOLS tag can be used to specify one or more symbol names
 # (namespaces, classes, functions, etc.) that should be excluded from the
@@ -2056,9 +2059,35 @@ INCLUDE_FILE_PATTERNS  =
 # recursively expanded use the := operator instead of the = operator.
 # This tag requires that the tag ENABLE_PREPROCESSING is set to YES.
 
-PREDEFINED             = DOXYGEN_ONLY \
+PREDEFINED             = DOXYGEN_ONLY            \
+                         DEVICE_ANALOGIN         \
+                         DEVICE_ANALOGOUT        \
+                         DEVICE_CAN              \
+                         DEVICE_ETHERNET         \
+                         DEVICE_EMAC             \
+                         DEVICE_FLASH            \
+                         DEVICE_I2C              \
+                         DEVICE_I2CSLAVE         \
+                         DEVICE_I2C_ASYNCH       \
+                         DEVICE_INTERRUPTIN      \
+                         DEVICE_LOWPOWERTIMER    \
+                         DEVICE_PORTIN           \
+                         DEVICE_PORTINOUT        \
+                         DEVICE_PORTOUT          \
+                         DEVICE_PWMOUT           \
+                         DEVICE_RTC              \
+                         DEVICE_TRNG             \
+                         DEVICE_SERIAL           \
+                         DEVICE_SERIAL_ASYNCH    \
+                         DEVICE_SERIAL_FC        \
+                         DEVICE_SLEEP            \
+                         DEVICE_SPI              \
+                         DEVICE_SPI_ASYNCH       \
+                         DEVICE_SPISLAVE         \
+                         DEVICE_STORAGE          \
                          "MBED_DEPRECATED_SINCE(d, m)=" \
-                         "MBED_ENABLE_IF_CALLBACK_COMPATIBLE(F, M)="
+                         "MBED_ENABLE_IF_CALLBACK_COMPATIBLE(F, M)=" \
+                         "MBED_DEPRECATED(s)="
 
 # If the MACRO_EXPANSION and EXPAND_ONLY_PREDEF tags are set to YES then this
 # tag can be used to specify a list of macro names that should be expanded. The

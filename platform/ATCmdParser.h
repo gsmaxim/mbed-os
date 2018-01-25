@@ -24,12 +24,22 @@
 #include <cstdarg>
 #include "Callback.h"
 
+namespace mbed {
+
+/** \addtogroup platform */
+/** @{*/
+/**
+ * \defgroup platform_ATCmdParser ATCmdParser class
+ * @{
+ */
+
 /**
  * Parser class for parsing AT commands
  *
  * Here are some examples:
  * @code
- * ATCmdParser at = ATCmdParser(serial, "\r\n");
+ * UARTSerial serial = UARTSerial(D1, D0);
+ * ATCmdParser at = ATCmdParser(&serial, "\r\n");
  * int value;
  * char buffer[100];
  *
@@ -41,8 +51,6 @@
  * at.recv("OK");
  * @endcode
  */
-
-namespace mbed {
 
 class ATCmdParser : private NonCopyable<ATCmdParser>
 {
@@ -287,7 +295,22 @@ public:
      * recv operation.
      */
     void abort();
+    
+    /**
+    * Process out-of-band data
+    *
+    * Process out-of-band data in the receive buffer. This function
+    * returns immediately if there is no data to process.
+    *
+    * @return true if oob data processed, false otherwise
+    */
+    bool process_oob(void);
 };
+
+/**@}*/
+
+/**@}*/
+
 } //namespace mbed
 
 #endif //MBED_ATCMDPARSER_H

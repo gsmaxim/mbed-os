@@ -33,7 +33,6 @@
 typedef struct {
     bool         used_as_gpio : 1;
     PinDirection direction    : 1;
-    bool         init_high    : 1;
     PinMode      pull         : 2;
     bool         used_as_irq  : 1;
     bool         irq_fall     : 1;
@@ -151,12 +150,12 @@ static void gpio_apply_config(uint8_t pin)
                         cfg.pull = NRF_GPIO_PIN_NOPULL;
                     break;
                 }
-                nrf_drv_gpiote_in_init(pin, &cfg, NULL);
+                nrf_gpio_cfg_input(pin,cfg.pull);
             }
         }
         else {
             // Configure as output.
-            nrf_drv_gpiote_out_config_t cfg = GPIOTE_CONFIG_OUT_SIMPLE(m_gpio_cfg[pin].init_high);
+            nrf_drv_gpiote_out_config_t cfg = GPIOTE_CONFIG_OUT_SIMPLE(nrf_gpio_pin_out_read(pin));
             nrf_drv_gpiote_out_init(pin, &cfg);
         }
         m_gpio_initialized |= ((gpio_mask_t)1UL << pin);

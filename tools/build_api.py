@@ -400,7 +400,7 @@ def merge_region_list(region_list, destination, padding=b'\xFF'):
         merged.tofile(output, format='bin')
 
 def scan_resources(src_paths, toolchain, dependencies_paths=None,
-                   inc_dirs=None, base_path=None):
+                   inc_dirs=None, base_path=None, collect_ignores=False):
     """ Scan resources using initialized toolcain
 
     Positional arguments
@@ -412,9 +412,11 @@ def scan_resources(src_paths, toolchain, dependencies_paths=None,
     """
 
     # Scan src_path
-    resources = toolchain.scan_resources(src_paths[0], base_path=base_path)
+    resources = toolchain.scan_resources(src_paths[0], base_path=base_path,
+                                         collect_ignores=collect_ignores)
     for path in src_paths[1:]:
-        resources.add(toolchain.scan_resources(path, base_path=base_path))
+        resources.add(toolchain.scan_resources(path, base_path=base_path,
+                                               collect_ignores=collect_ignores))
 
     # Scan dependency paths for include dirs
     if dependencies_paths is not None:
@@ -436,6 +438,11 @@ def scan_resources(src_paths, toolchain, dependencies_paths=None,
     # Set the toolchain's configuration data
     toolchain.set_config_data(toolchain.config.get_config_data())
 
+    if  (hasattr(toolchain.target, "release_versions") and
+            "5" not in toolchain.target.release_versions and
+            "rtos" in toolchain.config.lib_config_data):
+            raise NotSupportedException("Target does not support mbed OS 5")
+
     return resources
 
 def build_project(src_paths, build_path, target, toolchain_name,
@@ -444,7 +451,7 @@ def build_project(src_paths, build_path, target, toolchain_name,
                   macros=None, inc_dirs=None, jobs=1, silent=False,
                   report=None, properties=None, project_id=None,
                   project_description=None, extra_verbose=False, config=None,
-                  app_config=None, build_profile=None):
+                  app_config=None, build_profile=None, stats_depth=None):
     """ Build a project. A project may be a test or a user program.
 
     Positional arguments:
@@ -473,6 +480,7 @@ def build_project(src_paths, build_path, target, toolchain_name,
     config - a Config object to use instead of creating one
     app_config - location of a chosen mbed_app.json file
     build_profile - a dict of flags that will be passed to the compiler
+    stats_depth - depth level for memap to display file/dirs
     """
 
     # Convert src_path to a list if needed
@@ -516,17 +524,6 @@ def build_project(src_paths, build_path, target, toolchain_name,
     try:
         # Call unified scan_resources
         resources = scan_resources(src_paths, toolchain, inc_dirs=inc_dirs)
-        if  (hasattr(toolchain.target, "release_versions") and
-             "5" not in toolchain.target.release_versions and
-             "rtos" in toolchain.config.lib_config_data):
-            if "Cortex-A" in toolchain.target.core:
-                raise NotSupportedException(
-                    ("%s Will be supported in mbed OS 5.6. "
-                     "To use the %s, please checkout the mbed OS 5.4 release branch. "
-                     "See https://developer.mbed.org/platforms/Renesas-GR-PEACH/#important-notice "
-                     "for more information") % (toolchain.target.name, toolchain.target.name))
-            else:
-                raise NotSupportedException("Target does not support mbed OS 5")
 
         # Change linker script if specified
         if linker_script is not None:
@@ -551,18 +548,18 @@ def build_project(src_paths, build_path, target, toolchain_name,
         memap_table = ''
         if memap_instance:
             # Write output to stdout in text (pretty table) format
-            memap_table = memap_instance.generate_output('table')
+            memap_table = memap_instance.generate_output('table', stats_depth)
 
             if not silent:
                 print memap_table
 
             # Write output to file in JSON format
             map_out = join(build_path, name + "_map.json")
-            memap_instance.generate_output('json', map_out)
+            memap_instance.generate_output('json', stats_depth, map_out)
 
             # Write output to file in CSV format for the CI
             map_csv = join(build_path, name + "_map.csv")
-            memap_instance.generate_output('csv-ci', map_csv)
+            memap_instance.generate_output('csv-ci', stats_depth, map_csv)
 
         resources.detect_duplicates(toolchain)
 
@@ -571,7 +568,8 @@ def build_project(src_paths, build_path, target, toolchain_name,
             cur_result["elapsed_time"] = end - start
             cur_result["output"] = toolchain.get_output() + memap_table
             cur_result["result"] = "OK"
-            cur_result["memory_usage"] = toolchain.map_outputs
+            cur_result["memory_usage"] = (memap_instance.mem_report
+                                          if memap_instance is not None else None)
             cur_result["bin"] = res
             cur_result["elf"] = splitext(res)[0] + ".elf"
             cur_result.update(toolchain.report)
@@ -1001,19 +999,6 @@ def build_mbed_libs(target, toolchain_name, verbose=False,
         config.add_config_files([MBED_CONFIG_FILE])
         toolchain.set_config_data(toolchain.config.get_config_data())
 
-        # CMSIS
-        toolchain.info("Building library %s (%s, %s)" %
-                       ('CMSIS', target.name, toolchain_name))
-        cmsis_src = MBED_CMSIS_PATH
-        resources = toolchain.scan_resources(cmsis_src)
-
-        toolchain.copy_files(resources.headers, build_target)
-        toolchain.copy_files(resources.linker_script, build_toolchain)
-        toolchain.copy_files(resources.bin_files, build_toolchain)
-
-        objects = toolchain.compile_sources(resources, tmp_path)
-        toolchain.copy_files(objects, build_toolchain)
-
         # mbed
         toolchain.info("Building library %s (%s, %s)" %
                        ('MBED', target.name, toolchain_name))
@@ -1029,9 +1014,12 @@ def build_mbed_libs(target, toolchain_name, verbose=False,
             toolchain.copy_files(resources.headers, dest)
             library_incdirs.append(dest)
 
-        # Target specific sources
-        hal_src = MBED_TARGETS_PATH
-        hal_implementation = toolchain.scan_resources(hal_src)
+        cmsis_implementation = toolchain.scan_resources(MBED_CMSIS_PATH)
+        toolchain.copy_files(cmsis_implementation.headers, build_target)
+        toolchain.copy_files(cmsis_implementation.linker_script, build_toolchain)
+        toolchain.copy_files(cmsis_implementation.bin_files, build_toolchain)
+
+        hal_implementation = toolchain.scan_resources(MBED_TARGETS_PATH)
         toolchain.copy_files(hal_implementation.headers +
                              hal_implementation.hex_files +
                              hal_implementation.libraries +
@@ -1040,8 +1028,8 @@ def build_mbed_libs(target, toolchain_name, verbose=False,
         toolchain.copy_files(hal_implementation.linker_script, build_toolchain)
         toolchain.copy_files(hal_implementation.bin_files, build_toolchain)
         incdirs = toolchain.scan_resources(build_target).inc_dirs
-        objects = toolchain.compile_sources(hal_implementation,
-                                            library_incdirs + incdirs)
+        objects = toolchain.compile_sources(cmsis_implementation + hal_implementation,
+                                            library_incdirs + incdirs + [tmp_path])
         toolchain.copy_files(objects, build_toolchain)
 
         # Common Sources
@@ -1125,6 +1113,9 @@ def get_unique_supported_toolchains(release_targets=None):
                 if toolchain not in unique_supported_toolchains:
                     unique_supported_toolchains.append(toolchain)
 
+    if "ARM" in unique_supported_toolchains:
+        unique_supported_toolchains.append("ARMC6")
+
     return unique_supported_toolchains
 
 def mcu_toolchain_list(release_version='5'):
@@ -1161,7 +1152,7 @@ def mcu_toolchain_list(release_version='5'):
 
 
 def mcu_target_list(release_version='5'):
-    """  Shows target list 
+    """  Shows target list
 
     """
 
@@ -1270,7 +1261,9 @@ def mcu_toolchain_matrix(verbose_html=False, platform_filter=None,
             row.append(text)
 
         for unique_toolchain in unique_supported_toolchains:
-            if unique_toolchain in TARGET_MAP[target].supported_toolchains:
+            if (unique_toolchain in TARGET_MAP[target].supported_toolchains or
+                (unique_toolchain == "ARMC6" and
+                 "ARM" in TARGET_MAP[target].supported_toolchains)):
                 text = "Supported"
                 perm_counter += 1
             else:
@@ -1321,7 +1314,7 @@ def print_build_memory_usage(report):
     """
     from prettytable import PrettyTable
     columns_text = ['name', 'target', 'toolchain']
-    columns_int = ['static_ram', 'stack', 'heap', 'total_ram', 'total_flash']
+    columns_int = ['static_ram', 'total_flash']
     table = PrettyTable(columns_text + columns_int)
 
     for col in columns_text:
@@ -1348,10 +1341,6 @@ def print_build_memory_usage(report):
                                 record['toolchain_name'],
                                 record['memory_usage'][-1]['summary'][
                                     'static_ram'],
-                                record['memory_usage'][-1]['summary']['stack'],
-                                record['memory_usage'][-1]['summary']['heap'],
-                                record['memory_usage'][-1]['summary'][
-                                    'total_ram'],
                                 record['memory_usage'][-1]['summary'][
                                     'total_flash'],
                             ]

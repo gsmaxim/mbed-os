@@ -1,25 +1,16 @@
 /*
- * Copyright (c) 2017 ARM Limited. All rights reserved.
- *
- * SPDX-License-Identifier: LicenseRef-PBL
- *
- * Licensed under the Permissive Binary License, Version 1.0 (the "License"); you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * https://www.mbed.com/licenses/PBL-1.0
- *
- * See the License for the specific language governing permissions and limitations under the License.
- *
+ * Copyright (c) 2017, Arm Limited and affiliates.
  * SPDX-License-Identifier: Apache-2.0
- * Licensed under the Apache License, Version 2.0 (the License); you may
- * not use this file except in compliance with the License.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an AS IS BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
@@ -27,8 +18,22 @@
 #ifndef _NS_MDNS_API_H_
 #define _NS_MDNS_API_H_
 
-typedef struct ns_mdns_service *ns_mdns_service_t;
-typedef struct ns_mdns *ns_mdns_t;
+/**
+ * \file ns_mdns_api.h
+ * \brief Nanostack mDNS-SD API.
+ */
+
+/*!
+ * \struct ns_mdns_t
+ * \brief Structure for Nanostack mDNS instance
+ */
+typedef struct ns_mdns *ns_mdns_t;  /**< Instance */
+
+/*!
+ * \struct ns_mdns_service_t
+ * \brief Structure for Nanostack mDNS service instance
+ */
+typedef struct ns_mdns_service *ns_mdns_service_t;  /**< Service instance */
 
 /*!
  * \struct ns_mdns_service_param_t
@@ -60,22 +65,22 @@ ns_mdns_t ns_mdns_server_start(const char *server_name, uint32_t ttl, uint32_t t
 /**
  * \brief Stop mDNS server
  *
- * \param ns_mdns Server instance received from ns_mdns_server_start
+ * \param ns_mdns_instance Server instance received from ns_mdns_server_start
  *
  */
-void ns_mdns_server_stop(ns_mdns_t ns_mdns);
+void ns_mdns_server_stop(ns_mdns_t ns_mdns_instance);
 
 /**
  * \brief Register service to mDNS server
  *
- * \param ns_mdns Server instance received from ns_mdns_server_start
+ * \param ns_mdns_instance Server instance received from ns_mdns_server_start
  *
  * \param service Parameters for service
  *
  * \return mDNS Service descriptor or NULL in case of failure.
  *
  */
-ns_mdns_service_t ns_mdns_service_register(ns_mdns_t ns_mdns, ns_mdns_service_param_t *service);
+ns_mdns_service_t ns_mdns_service_register(ns_mdns_t ns_mdns_instance, ns_mdns_service_param_t *service);
 
 /**
  * \brief Unregister service from mDNS server
@@ -89,9 +94,10 @@ void ns_mdns_service_unregister(ns_mdns_service_t service_desc);
  * \brief Send mDNS announcement. Application should call this method once application
  * advertised parameters has changed.
  *
- * \param ns_mdns Server instance received from ns_mdns_server_start
+ * \param ns_mdns_instance Server instance received from ns_mdns_server_start
  */
 
-void ns_mdns_announcement_send(ns_mdns_t ns_mdns);
+void ns_mdns_announcement_send(ns_mdns_t ns_mdns_instance);
 
 #endif /* _NS_MDNS_API_H_ */
+

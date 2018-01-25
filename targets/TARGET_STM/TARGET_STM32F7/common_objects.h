@@ -111,6 +111,12 @@ struct i2c_s {
 #endif
 };
 
+struct analogin_s {
+    ADC_HandleTypeDef handle;
+    PinName pin;
+    uint8_t channel;
+};
+
 #define GPIO_IP_WITHOUT_BRR
 #include "gpio_object.h"
 
@@ -120,6 +126,19 @@ struct dac_s {
     uint32_t channel;
     DAC_HandleTypeDef handle;
 };
+
+struct flash_s {
+    /*  nothing to be stored for now */
+    uint32_t dummy;
+};
+
+#if DEVICE_CAN
+struct can_s {
+    CAN_HandleTypeDef CanHandle;
+    int index;
+    int hz;
+};
+#endif
 
 #ifdef __cplusplus
 }

@@ -58,31 +58,30 @@ static SingletonPtr<TestClass> test_class;
 static void main_func_race()
 {
     get_test_class();
+    TEST_ASSERT_EQUAL_UINT32(1, instance_count);
 }
 
 static void main_class_race()
 {
     test_class->do_something();
+    TEST_ASSERT_EQUAL_UINT32(1, instance_count);
 }
 
 void test_case_func_race()
 {
     Callback<void()> cb(main_func_race);
-    Thread *t1 = new Thread(osPriorityNormal, TEST_STACK_SIZE);
-    Thread *t2 = new Thread(osPriorityNormal, TEST_STACK_SIZE);
+    Thread t1(osPriorityNormal, TEST_STACK_SIZE);
+    Thread t2(osPriorityNormal, TEST_STACK_SIZE);
 
     // Start start first thread
-    t1->start(cb);
+    t1.start(cb);
     // Start second thread while the first is inside the constructor
     Thread::wait(250);
-    t2->start(cb);
+    t2.start(cb);
 
     // Wait for the threads to finish
-    t1->join();
-    t2->join();
-
-    delete t1;
-    delete t2;
+    t1.join();
+    t2.join();
 
     TEST_ASSERT_EQUAL_UINT32(1, instance_count);
 
@@ -93,21 +92,18 @@ void test_case_func_race()
 void test_case_class_race()
 {
     Callback<void()> cb(main_class_race);
-    Thread *t1 = new Thread(osPriorityNormal, TEST_STACK_SIZE);
-    Thread *t2 = new Thread(osPriorityNormal, TEST_STACK_SIZE);
+    Thread t1(osPriorityNormal, TEST_STACK_SIZE);
+    Thread t2(osPriorityNormal, TEST_STACK_SIZE);
 
     // Start start first thread
-    t1->start(cb);
+    t1.start(cb);
     // Start second thread while the first is inside the constructor
     Thread::wait(250);
-    t2->start(cb);
+    t2.start(cb);
 
     // Wait for the threads to finish
-    t1->join();
-    t2->join();
-
-    delete t1;
-    delete t2;
+    t1.join();
+    t2.join();
 
     TEST_ASSERT_EQUAL_UINT32(1, instance_count);
 

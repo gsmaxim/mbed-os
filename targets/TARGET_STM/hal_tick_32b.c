@@ -42,7 +42,7 @@ void timer_irq_handler(void)
     if (__HAL_TIM_GET_FLAG(&TimMasterHandle, TIM_FLAG_CC2) == SET) {
         if (__HAL_TIM_GET_IT_SOURCE(&TimMasterHandle, TIM_IT_CC2) == SET) {
             __HAL_TIM_CLEAR_IT(&TimMasterHandle, TIM_IT_CC2);
-            uint32_t val = __HAL_TIM_GetCounter(&TimMasterHandle);
+            uint32_t val = __HAL_TIM_GET_COUNTER(&TimMasterHandle);
             if ((val - PreviousVal) >= HAL_TICK_DELAY) {
                 // Increment HAL variable
                 HAL_IncTick();
@@ -114,9 +114,15 @@ HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority)
 
     // Channel 2 for HAL tick
     HAL_TIM_OC_Start(&TimMasterHandle, TIM_CHANNEL_2);
-    PreviousVal = __HAL_TIM_GetCounter(&TimMasterHandle);
+    PreviousVal = __HAL_TIM_GET_COUNTER(&TimMasterHandle);
     __HAL_TIM_SET_COMPARE(&TimMasterHandle, TIM_CHANNEL_2, PreviousVal + HAL_TICK_DELAY);
     __HAL_TIM_ENABLE_IT(&TimMasterHandle, TIM_IT_CC2);
+
+    // Freeze timer on stop/breakpoint
+    // Define the FREEZE_TIMER_ON_DEBUG macro in mbed_app.json for example
+#if !defined(NDEBUG) && defined(FREEZE_TIMER_ON_DEBUG) && defined(TIM_MST_DBGMCU_FREEZE)
+    TIM_MST_DBGMCU_FREEZE;
+#endif
 
 #if DEBUG_TICK > 0
     __HAL_RCC_GPIOB_CLK_ENABLE();
@@ -131,15 +137,15 @@ HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority)
     return HAL_OK;
 }
 
+/* NOTE: must be called with interrupts disabled! */
 void HAL_SuspendTick(void)
 {
-    TimMasterHandle.Instance = TIM_MST;
     __HAL_TIM_DISABLE_IT(&TimMasterHandle, TIM_IT_CC2);
 }
 
+/* NOTE: must be called with interrupts disabled! */
 void HAL_ResumeTick(void)
 {
-    TimMasterHandle.Instance = TIM_MST;
     __HAL_TIM_ENABLE_IT(&TimMasterHandle, TIM_IT_CC2);
 }
 

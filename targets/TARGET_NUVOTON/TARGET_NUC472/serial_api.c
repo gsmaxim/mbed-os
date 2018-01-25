@@ -299,7 +299,11 @@ void serial_format(serial_t *obj, int data_bits, SerialParity parity, int stop_b
     // Flush Tx FIFO. Otherwise, output data may get lost on this change.
     while (! UART_IS_TX_EMPTY(((UART_T *) NU_MODBASE(obj->serial.uart))));
     
-    // TODO: Assert for not supported parity and data bits
+    // Sanity check arguments    
+    MBED_ASSERT((data_bits == 5) || (data_bits == 6) || (data_bits == 7) || (data_bits == 8));
+    MBED_ASSERT((parity == ParityNone) || (parity == ParityOdd) || (parity == ParityEven) || (parity == ParityForced1) || (parity == ParityForced0));
+    MBED_ASSERT((stop_bits == 1) || (stop_bits == 2));
+    
     obj->serial.databits = data_bits;
     obj->serial.parity = parity;
     obj->serial.stopbits = stop_bits;
@@ -688,33 +692,6 @@ int serial_irq_handler_asynch(serial_t *obj)
     }
         
     return (obj->serial.event & (event_rx | event_tx));
-}
-
-int serial_allow_powerdown(void)
-{
-    uint32_t modinit_mask = uart_modinit_mask;
-    while (modinit_mask) {
-        int uart_idx = nu_ctz(modinit_mask);
-        const struct nu_modinit_s *modinit = uart_modinit_tab + uart_idx;
-        if (modinit->modname != NC) {
-            UART_T *uart_base = (UART_T *) NU_MODBASE(modinit->modname);
-            // Disallow entering power-down mode if Tx FIFO has data to flush
-            if (! UART_IS_TX_EMPTY((uart_base))) {
-                return 0;
-            }
-            // Disallow entering power-down mode if async Rx transfer (not PDMA) is on-going
-            if (uart_base->INTEN & (UART_INTEN_RDAIEN_Msk | UART_INTEN_RXTOIEN_Msk)) {
-                return 0;
-            }
-            // Disallow entering power-down mode if async Rx transfer (PDMA) is on-going
-            if (uart_base->INTEN & UART_INTEN_RXPDMAEN_Msk) {
-                return 0;
-            }
-        }
-        modinit_mask &= ~(1 << uart_idx);
-    }
-    
-    return 1;
 }
 
 static void uart0_vec_async(void)

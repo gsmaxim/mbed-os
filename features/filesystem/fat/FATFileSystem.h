@@ -43,24 +43,24 @@ public:
      */
     FATFileSystem(const char *name = NULL, BlockDevice *bd = NULL);
     virtual ~FATFileSystem();
-    
+
     /** Formats a logical drive, FDISK partitioning rule.
      *
      *  The block device to format should be mounted when this function is called.
      *
      *  @param bd
-     *    This is the block device that will be formated.
+     *    This is the block device that will be formatted.
      *
-     *  @param allocation_unit
-     *    This is the number of bytes per cluster size. The valid value is N
-     *    times the sector size. N is a power of 2 from 1 to 128 for FAT
-     *    volume and upto 16MiB for exFAT volume. If zero is given,
-     *    the default allocation unit size is selected by the underlying
-     *    filesystem, which depends on the volume size.
-     *   
+     *  @param cluster_size
+     *    This is the number of bytes per cluster. A larger cluster size will decrease
+     *    the overhead of the FAT table, but also increase the minimum file size. The
+     *    cluster_size must be a multiple of the underlying device's allocation unit
+     *    and is currently limited to a max of 32,768 bytes. If zero, a cluster size
+     *    will be determined from the device's allocation unit. Defaults to zero.
+     *
      *  @return         0 on success, negative error code on failure
      */
-    static int format(BlockDevice *bd, int allocation_unit = 0);
+    static int format(BlockDevice *bd, bd_size_t cluster_size = 0);
 
     /** Mounts a filesystem to a block device
      *
@@ -74,6 +74,39 @@ public:
      *  @return         0 on success, negative error code on failure
      */
     virtual int unmount();
+
+    /** Reformats a filesystem, results in an empty and mounted filesystem
+     *
+     *  @param bd
+     *      BlockDevice to reformat and mount. If NULL, the mounted
+     *      block device will be used.
+     *      Note: if mount fails, bd must be provided.
+     *      Default: NULL
+     *
+     *  @param allocation_unit
+     *      This is the number of bytes per cluster size. The valid value is N
+     *      times the sector size. N is a power of 2 from 1 to 128 for FAT
+     *      volume and upto 16MiB for exFAT volume. If zero is given,
+     *      the default allocation unit size is selected by the underlying
+     *      filesystem, which depends on the volume size.
+     *
+     *  @return         0 on success, negative error code on failure
+     */
+    virtual int reformat(BlockDevice *bd, int allocation_unit);
+
+    /** Reformats a filesystem, results in an empty and mounted filesystem
+     *
+     *  @param bd       BlockDevice to reformat and mount. If NULL, the mounted
+     *                  block device will be used.
+     *                  Note: if mount fails, bd must be provided.
+     *                  Default: NULL
+     *  @return         0 on success, negative error code on failure
+     */
+    virtual int reformat(BlockDevice *bd = NULL)
+    {
+        // required for virtual inheritance shenanigans
+        return reformat(bd, 0);
+    }
 
     /** Remove a file from the filesystem.
      *
@@ -106,6 +139,14 @@ public:
      */
     virtual int mkdir(const char *path, mode_t mode);
 
+    /** Store information about the mounted filesystem in a statvfs structure
+     *
+     *  @param path     The name of the file to find information about
+     *  @param buf      The stat buffer to write to
+     *  @return         0 on success, negative error code on failure
+     */
+     virtual int statvfs(const char *path, struct statvfs *buf);
+
 protected:
     /** Open a file on the filesystem
      *
@@ -137,7 +178,7 @@ protected:
      *
      *  @param file     File handle
      *  @param buffer   The buffer to write from
-     *  @param len      The number of bytes to write 
+     *  @param len      The number of bytes to write
      *  @return         The number of bytes written, negative error on failure
      */
     virtual ssize_t file_write(fs_file_t file, const void *buffer, size_t len);
@@ -218,7 +259,7 @@ protected:
      *  @param dir      Dir handle
      */
     virtual void dir_rewind(fs_dir_t dir);
-    
+
 private:
     FATFS _fs; // Work area (file system object) for logical drive
     char _fsid[sizeof("0:")];

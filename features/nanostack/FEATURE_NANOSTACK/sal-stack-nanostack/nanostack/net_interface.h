@@ -1,15 +1,18 @@
 /*
- * Copyright (c) 2014-2017 ARM Limited. All rights reserved.
+ * Copyright (c) 2014-2017, Arm Limited and affiliates.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * SPDX-License-Identifier: LicenseRef-PBL
- *
- * Licensed under the Permissive Binary License, Version 1.0 (the "License"); you may not use this file except in compliance with the License.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- * https://www.mbed.com/licenses/PBL-1.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * See the License for the specific language governing permissions and limitations under the License.
- *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #ifndef NET_INTERFACE_H_
@@ -171,8 +174,13 @@ typedef enum {
 typedef enum {
     NET_IPV6_BOOTSTRAP_STATIC,  /**< Application defines the IPv6 prefix. */
     NET_IPV6_BOOTSTRAP_AUTONOMOUS /**< Interface gets IPv6 address automatically from network using ICMP and DHCP. */
-}
-net_ipv6_mode_e;
+} net_ipv6_mode_e;
+
+/** IPv6 accept RA behaviour */
+typedef enum {
+    NET_IPV6_RA_ACCEPT_IF_AUTONOMOUS, /**<Accept Router Advertisements when using autonomous IPv6 address allocation. Ignore when using a static address. This is the default value for the setting. */
+    NET_IPV6_RA_ACCEPT_ALWAYS         /**<Accept Router Advertisements always, even when using static IPv6 address allocation. */
+} net_ipv6_accept_ra_e;
 
 /** Network coordinator parameter list.
  * Structure is used to read network parameter for warm start.
@@ -312,6 +320,19 @@ extern int8_t arm_nwk_interface_lowpan_init(struct mac_api_s *api, char *interfa
 extern int8_t arm_nwk_interface_configure_ipv6_bootstrap_set(int8_t interface_id, net_ipv6_mode_e bootstrap_mode, const uint8_t *ipv6_prefix_pointer);
 
 /**
+ * \brief Accept Router Advertisements setting.
+ *
+ * Accept Router Advertisements setting. Setting can be changed after an interface is created.
+ * If setting is changed it must be done before the bootstrap is started.
+ *
+ * \param interface_id The network interface ID.
+ * \param accept_ra Router Advertisements handling mode.
+ * \return 0 Setting done.
+ * \return <0 Failed (for example an invalid interface ID).
+ */
+extern int8_t arm_nwk_interface_accept_ipv6_ra(int8_t interface_id, net_ipv6_accept_ra_e accept_ra);
+
+/**
  * \brief Set network interface bootstrap setup.
  *
  * \param interface_id Network interface ID.
@@ -412,7 +433,9 @@ extern int8_t arm_nwk_6lowpan_link_scan_parameter_set(int8_t interface_id, uint8
 extern int8_t arm_nwk_6lowpan_link_panid_filter_for_nwk_scan(int8_t interface_id, uint16_t pan_id_filter);
 
 /**
-  *  \brief Get current used channel.
+  * \brief Get current used channel.
+  *
+  * \param interface_id Network interface ID.
   *
   * \return Active channel.
   * \return -1 = Radio is closed.
@@ -421,9 +444,13 @@ extern int16_t arm_net_get_current_channel(int8_t interface_id);
 
 /**
  * \brief A function to read the PAN ID filter.
+ *
+ * \param interface_id Network interface ID.
+ *
  * \return 16-bit value indicating a PAN ID filter.
  */
 extern uint16_t arm_net_get_nwk_pan_id_filter(int8_t interface_id);
+
 /**
   * \brief Enable/Disable network ID filter.
   *
@@ -435,6 +462,7 @@ extern uint16_t arm_net_get_nwk_pan_id_filter(int8_t interface_id);
   * \return -2 Interface active.
   */
 extern int8_t arm_nwk_6lowpan_link_nwk_id_filter_for_nwk_scan(int8_t interface_id, const uint8_t *nwk_id_filter);
+
 /**
   * \brief Enable/Disable network protocol ID filter.
   *
@@ -560,7 +588,6 @@ extern int8_t arm_pana_server_library_init(int8_t interface_id, net_tls_cipher_e
   */
 extern int8_t arm_pana_client_key_pull(int8_t interface_id);
 
-
 /**
  * \brief Trigger network key update process
  *
@@ -591,7 +618,6 @@ extern int8_t arm_pana_server_key_update(int8_t interface_id, const uint8_t *net
  */
 extern int8_t arm_pana_activate_new_key(int8_t interface_id);
 
-
 /**
  * \brief Read PANA server security key material.
  *
@@ -617,11 +643,11 @@ extern int8_t arm_network_key_get(int8_t interface_id, ns_keys_t *key);
  * \return -3 Active.
  */
 extern int8_t arm_nwk_interface_up(int8_t interface_id);
+
 /**
  * \brief Stop and set interface to idle.
  *
  * \param interface_id Network interface ID
- *
  *
  * \return >=0 Process OK.
  * \return -1 Unknown network ID.
@@ -635,11 +661,12 @@ extern int8_t arm_nwk_interface_down(int8_t interface_id);
  * \param interface_id Network interface ID.
  * \param border_router_setup_ptr Pointer to MAC and 6LoWPAN ND setup.
  *
+ * \return 0 on success, negative value on error case.
  */
 extern int8_t arm_nwk_6lowpan_border_router_init(int8_t interface_id, const border_router_setup_s *border_router_setup_ptr);
+
 /**
  * \brief Add context at 6LoWPAN interface configure state.
- *
  *
  * \param interface_id Network interface ID.
  * \param c_id_flags Bit 4 indicates compress support and bit 0-3 context ID.
@@ -654,6 +681,7 @@ extern int8_t arm_nwk_6lowpan_border_router_init(int8_t interface_id, const bord
  * \
  */
 extern int8_t arm_nwk_6lowpan_border_router_context_update(int8_t interface_id, uint8_t c_id_flags, uint8_t context_len, uint16_t ttl, const uint8_t *context_ptr);
+
 /**
  * \brief Update runtime configured context.
  *
@@ -670,6 +698,7 @@ extern int8_t arm_nwk_6lowpan_border_router_context_update(int8_t interface_id, 
  *
  */
 extern int8_t arm_nwk_6lowpan_border_router_context_parameter_update(int8_t interface_id, uint8_t c_id, uint8_t compress_mode, uint16_t ttl);
+
 /**
  * \brief Delete allocated context by ID.
  *
@@ -680,6 +709,7 @@ extern int8_t arm_nwk_6lowpan_border_router_context_parameter_update(int8_t inte
  * \return -1 Delete process fails.
  */
 extern int8_t arm_nwk_6lowpan_border_router_context_remove_by_id(int8_t interface_id, uint8_t c_id);
+
 /**
  * \brief Update ND ABRO version number.
  *
@@ -708,7 +738,6 @@ extern int8_t arm_nwk_6lowpan_border_route_nd_default_prefix_timeout_set(int8_t 
  */
 int8_t arm_nwk_param_read(int8_t interface_id, link_layer_setups_s *network_params);
 
-
 /**
  * \brief A function to read MAC PAN-ID, Short address and EUID64.
  * \param interface_id Network interface ID.
@@ -717,7 +746,6 @@ int8_t arm_nwk_param_read(int8_t interface_id, link_layer_setups_s *network_para
  * \return Negative value if interface is not known.
  */
 int8_t arm_nwk_mac_address_read(int8_t interface_id, link_layer_address_s *mac_params);
-
 
 /**
  * \brief A function to read 6LoWPAN ND border router address and NWK prefix.
@@ -728,7 +756,6 @@ int8_t arm_nwk_mac_address_read(int8_t interface_id, link_layer_address_s *mac_p
  *          is not in active or ready state.
  */
 int8_t arm_nwk_nd_address_read(int8_t interface_id, network_layer_address_s *nd_addr_info);
-
 
 /**
  * \brief A function to read the networking address information.
@@ -840,9 +867,9 @@ extern int8_t arm_net_route_delete(const uint8_t *prefix, uint8_t prefix_len, co
 #define ND_PROXY_PREFIX_NVM_UPDATE          3
 /** ND ABRO version update. */
 #define ND_PROXY_ABRO_VERSION_NVM_UPDATE    4
+
 /**
  * \brief Load context from NVM at ZigBeeIP interface configure state.
- *
  *
  * \param interface_id Network Interface ID
  * \param contex_data A pointer to properly built 20 bytes update array.

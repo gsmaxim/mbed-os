@@ -68,6 +68,16 @@ public:
      */
     virtual int unmount() = 0;
 
+    /** Reformats a filesystem, results in an empty and mounted filesystem
+     *
+     *  @param bd       BlockDevice to reformat and mount. If NULL, the mounted
+     *                  block device will be used.
+     *                  Note: if mount fails, bd must be provided.
+     *                  Default: NULL
+     *  @return         0 on success, negative error code on failure
+     */
+    virtual int reformat(BlockDevice *bd = NULL);
+
     /** Remove a file from the filesystem.
      *
      *  @param path     The name of the file to remove.
@@ -98,6 +108,14 @@ public:
      *  @return         0 on success, negative error code on failure
      */
     virtual int mkdir(const char *path, mode_t mode);
+
+    /** Store information about the mounted filesystem in a statvfs structure
+     *
+     *  @param path     The name of the file to find information about
+     *  @param buf      The stat buffer to write to
+     *  @return         0 on success, negative error code on failure
+     */
+     virtual int statvfs(const char *path, struct statvfs *buf);
 
 protected:
     friend class File;
@@ -133,7 +151,7 @@ protected:
      *
      *  @param file     File handle
      *  @param buffer   The buffer to write from
-     *  @param size     The number of bytes to write 
+     *  @param size     The number of bytes to write
      *  @return         The number of bytes written, negative error on failure
      */
     virtual ssize_t file_write(fs_file_t file, const void *buffer, size_t size) = 0;
@@ -230,7 +248,7 @@ protected:
      */
     virtual void dir_rewind(fs_dir_t dir);
 
-    /** Get the sizeof the directory 
+    /** Get the sizeof the directory
      *
      *  @param dir      Dir handle
      *  @return         Number of files in the directory

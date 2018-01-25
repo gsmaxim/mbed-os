@@ -23,6 +23,7 @@
 #include "include/nd_tasklet.h"
 #include "include/mesh_system.h"
 #include "ns_event_loop.h"
+#include "multicast_api.h"
 
 // For tracing we need to define flag, have include and define group
 #define HAVE_DEBUG 1
@@ -105,7 +106,7 @@ static void initialize_channel_list(void)
 
     tr_debug("Channel: %ld", channel);
     tr_debug("Channel page: %d", tasklet_data_ptr->channel_list.channel_page);
-    tr_debug("Channel mask: %ld", tasklet_data_ptr->channel_list.channel_mask[word_index]);
+    tr_debug("Channel mask: 0x%.8lx", tasklet_data_ptr->channel_list.channel_mask[word_index]);
 }
 
 /*
@@ -264,6 +265,13 @@ void nd_tasklet_configure_and_connect_to_network(void)
     arm_nwk_6lowpan_link_panid_filter_for_nwk_scan(
          tasklet_data_ptr->network_interface_id,
          MBED_CONF_MBED_MESH_API_6LOWPAN_ND_PANID_FILTER);
+
+    // Enable MPL by default
+    const uint8_t all_mpl_forwarders[16] = {0xff, 0x03, [15]=0xfc};
+    multicast_mpl_domain_subscribe(tasklet_data_ptr->network_interface_id,
+                                      all_mpl_forwarders,
+                                      MULTICAST_MPL_SEED_ID_DEFAULT,
+                                      NULL);
 
     status = arm_nwk_interface_up(tasklet_data_ptr->network_interface_id);
     if (status >= 0) {

@@ -19,7 +19,12 @@
 #include <errno.h>
 #include "UARTSerial.h"
 #include "platform/mbed_poll.h"
+
+#if MBED_CONF_RTOS_PRESENT
+#include "rtos/Thread.h"
+#else
 #include "platform/mbed_wait_api.h"
+#endif
 
 namespace mbed {
 
@@ -27,6 +32,7 @@ UARTSerial::UARTSerial(PinName tx, PinName rx, int baud) :
         SerialBase(tx, rx, baud),
         _blocking(true),
         _tx_irq_enabled(false),
+        _rx_irq_enabled(true),
         _dcd_irq(NULL)
 {
     /* Attatch IRQ routines to the serial device. */
@@ -43,6 +49,11 @@ void UARTSerial::dcd_irq()
     wake();
 }
 
+void UARTSerial::set_baud(int baud)
+{
+    SerialBase::baud(baud);
+}
+
 void UARTSerial::set_data_carrier_detect(PinName dcd_pin, bool active_high)
 {
      delete _dcd_irq;
@@ -57,6 +68,22 @@ void UARTSerial::set_data_carrier_detect(PinName dcd_pin, bool active_high)
         }
     }
 }
+
+void UARTSerial::set_format(int bits, Parity parity, int stop_bits)
+{
+    api_lock();
+    SerialBase::format(bits, parity, stop_bits);
+    api_unlock();
+}
+
+#if DEVICE_SERIAL_FC
+void UARTSerial::set_flow_control(Flow type, PinName flow1, PinName flow2)
+{
+    api_lock();
+    SerialBase::set_flow_control(type, flow1, flow2);
+    api_unlock();
+}
+#endif
 
 int UARTSerial::close()
 {
@@ -111,36 +138,47 @@ ssize_t UARTSerial::write(const void* buffer, size_t length)
     size_t data_written = 0;
     const char *buf_ptr = static_cast<const char *>(buffer);
 
+    if (length == 0) {
+        return 0;
+    }
+
     api_lock();
 
-    while (_txbuf.full()) {
-        if (!_blocking) {
-            api_unlock();
-            return -EAGAIN;
-        }
-        api_unlock();
-        wait_ms(1); // XXX todo - proper wait, WFE for non-rtos ?
-        api_lock();
-    }
+    // Unlike read, we should write the whole thing if blocking. POSIX only
+    // allows partial as a side-effect of signal handling; it normally tries to
+    // write everything if blocking. Without signals we can always write all.
+    while (data_written < length) {
 
-    while (data_written < length && !_txbuf.full()) {
-        _txbuf.push(*buf_ptr++);
-        data_written++;
-    }
-
-    core_util_critical_section_enter();
-    if (!_tx_irq_enabled) {
-        UARTSerial::tx_irq();                // only write to hardware in one place
-        if (!_txbuf.empty()) {
-            SerialBase::attach(callback(this, &UARTSerial::tx_irq), TxIrq);
-            _tx_irq_enabled = true;
+        if (_txbuf.full()) {
+            if (!_blocking) {
+                break;
+            }
+            do {
+                api_unlock();
+                wait_ms(1); // XXX todo - proper wait, WFE for non-rtos ?
+                api_lock();
+            } while (_txbuf.full());
         }
+
+        while (data_written < length && !_txbuf.full()) {
+            _txbuf.push(*buf_ptr++);
+            data_written++;
+        }
+
+        core_util_critical_section_enter();
+        if (!_tx_irq_enabled) {
+            UARTSerial::tx_irq();                // only write to hardware in one place
+            if (!_txbuf.empty()) {
+                SerialBase::attach(callback(this, &UARTSerial::tx_irq), TxIrq);
+                _tx_irq_enabled = true;
+            }
+        }
+        core_util_critical_section_exit();
     }
-    core_util_critical_section_exit();
 
     api_unlock();
 
-    return data_written;
+    return data_written != 0 ? (ssize_t) data_written : (ssize_t) -EAGAIN;
 }
 
 ssize_t UARTSerial::read(void* buffer, size_t length)
@@ -148,6 +186,10 @@ ssize_t UARTSerial::read(void* buffer, size_t length)
     size_t data_read = 0;
 
     char *ptr = static_cast<char *>(buffer);
+
+    if (length == 0) {
+        return 0;
+    }
 
     api_lock();
 
@@ -165,6 +207,16 @@ ssize_t UARTSerial::read(void* buffer, size_t length)
         _rxbuf.pop(*ptr++);
         data_read++;
     }
+
+    core_util_critical_section_enter();
+    if (!_rx_irq_enabled) {
+        UARTSerial::rx_irq();               // only read from hardware in one place
+        if (!_rxbuf.full()) {
+            SerialBase::attach(callback(this, &UARTSerial::rx_irq), RxIrq);
+            _rx_irq_enabled = true;
+        }
+    }
+    core_util_critical_section_exit();
 
     api_unlock();
 
@@ -233,13 +285,14 @@ void UARTSerial::rx_irq(void)
 
     /* Fill in the receive buffer if the peripheral is readable
      * and receive buffer is not full. */
-    while (SerialBase::readable()) {
+    while (!_rxbuf.full() && SerialBase::readable()) {
         char data = SerialBase::_base_getc();
-        if (!_rxbuf.full()) {
-            _rxbuf.push(data);
-        } else {
-            /* Drop - can we report in some way? */
-        }
+        _rxbuf.push(data);
+    }
+
+    if (_rx_irq_enabled && _rxbuf.full()) {
+        SerialBase::attach(NULL, RxIrq);
+        _rx_irq_enabled = false;
     }
 
     /* Report the File handler that data is ready to be read from the buffer. */
@@ -272,6 +325,17 @@ void UARTSerial::tx_irq(void)
     }
 }
 
+void UARTSerial::wait_ms(uint32_t millisec)
+{
+    /* wait_ms implementation for RTOS spins until exact microseconds - we
+     * want to just sleep until next tick.
+     */
+#if MBED_CONF_RTOS_PRESENT
+    rtos::Thread::wait(millisec);
+#else
+    ::wait_ms(millisec);
+#endif
+}
 } //namespace mbed
 
 #endif //(DEVICE_SERIAL && DEVICE_INTERRUPTIN)

@@ -1,8 +1,8 @@
 /**************************************************************************//**
  * @file     cmsis_compiler.h
  * @brief    CMSIS compiler specific macros, functions, instructions
- * @version  V1.00
- * @date     22. Feb 2017
+ * @version  V1.0.1
+ * @date     01. December 2017
  ******************************************************************************/
 /*
  * Copyright (c) 2009-2017 ARM Limited. All rights reserved.
@@ -52,39 +52,7 @@
  * IAR Compiler
  */
 #elif defined ( __ICCARM__ )
-
-  #ifndef   __ASM
-    #define __ASM                     __asm
-  #endif
-  #ifndef   __INLINE
-    #define __INLINE                  inline
-  #endif
-  #ifndef   __STATIC_INLINE
-    #define __STATIC_INLINE           static inline
-  #endif
-
-  #include <cmsis_iar.h>
-
-  #ifndef   __NO_RETURN
-    #define __NO_RETURN               __noreturn
-  #endif
-  #ifndef   __USED
-    #define __USED                    __root
-  #endif
-  #ifndef   __WEAK
-    #define __WEAK                    __weak
-  #endif
-  #ifndef   __UNALIGNED_UINT32
-    __packed struct T_UINT32 { uint32_t v; };
-      #define __UNALIGNED_UINT32(x)     (((struct T_UINT32 *)(x))->v)
-  #endif
-  #ifndef   __ALIGNED
-    #warning No compiler specific solution for __ALIGNED. __ALIGNED is ignored.
-    #define __ALIGNED(x)
-  #endif
-  #ifndef   __PACKED
-    #define __PACKED                  __packed
-  #endif
+  #include "cmsis_iccarm.h"
 
 
 /*
@@ -102,8 +70,17 @@
   #ifndef   __STATIC_INLINE
     #define __STATIC_INLINE           static inline
   #endif
+  #ifndef   __STATIC_INLINE
+    #define __STATIC_INLINE           static inline
+  #endif
+  #ifndef   __STATIC_FORCEINLINE
+    #define __STATIC_FORCEINLINE      __STATIC_INLINE
+  #endif
   #ifndef   __NO_RETURN
     #define __NO_RETURN               __attribute__((noreturn))
+  #endif
+  #ifndef   CMSIS_DEPRECATED
+    #define CMSIS_DEPRECATED          __attribute__((deprecated))
   #endif
   #ifndef   __USED
     #define __USED                    __attribute__((used))
@@ -142,8 +119,14 @@
   #ifndef   __STATIC_INLINE
     #define __STATIC_INLINE           static inline
   #endif
+  #ifndef   __STATIC_FORCEINLINE
+    #define __STATIC_FORCEINLINE      __STATIC_INLINE
+  #endif
   #ifndef   __NO_RETURN
     #define __NO_RETURN               __attribute__((noreturn))
+  #endif
+  #ifndef   CMSIS_DEPRECATED
+    #define CMSIS_DEPRECATED          __attribute__((deprecated))
   #endif
   #ifndef   __USED
     #define __USED                    __attribute__((used))
@@ -178,6 +161,9 @@
   #ifndef   __STATIC_INLINE
     #define __STATIC_INLINE           static inline
   #endif
+  #ifndef   __STATIC_FORCEINLINE
+    #define __STATIC_FORCEINLINE      __STATIC_INLINE
+  #endif
   #ifndef   __NO_RETURN
     // NO RETURN is automatically detected hence no warning here
     #define __NO_RETURN
@@ -185,6 +171,10 @@
   #ifndef   __USED
     #warning No compiler specific solution for __USED. __USED is ignored.
     #define __USED
+  #endif
+  #ifndef   CMSIS_DEPRECATED
+    #warning No compiler specific solution for CMSIS_DEPRECATED. CMSIS_DEPRECATED is ignored.
+    #define CMSIS_DEPRECATED
   #endif
   #ifndef   __WEAK
     #define __WEAK                    __weak

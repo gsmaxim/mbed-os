@@ -197,7 +197,8 @@ typedef struct {
 
 /* ACLs list for the secure box: Timer (PIT). */
 static const UvisorBoxAclItem g_private_button_acls[] = {
-    {PORTC, sizeof(*PORTC), UVISOR_TACLDEF_PERIPH},     /* Private peripheral */
+    {PORTC,               sizeof(*PORTC), UVISOR_TACLDEF_PERIPH},     /* Private peripheral */
+    {(void *) PORTC_IRQn,              0, UVISOR_TACL_IRQ},           /* Private IRQ */
 };
 
 static void private_button_main_thread(const void *);
@@ -247,7 +248,7 @@ static void private_button_on_press(void)
         for (int i = 0; i < PRIVATE_BUTTON_BUFFER_COUNT; ++i) {
             uvisor_ctx->pc->printf("%lu ", uvisor_ctx->buffer[i]);
         }
-        uvisor_ctx->pc->printf("\r\n");
+        uvisor_ctx->pc->printf("\n");
     }
 
 }
@@ -257,13 +258,14 @@ static void private_button_main_thread(const void *)
 {
     /* Allocate serial port to ensure that code in this secure box
      * won't touch handle in the default security context when printing */
-    if (!(uvisor_ctx->pc = new RawSerial(USBTX, USBRX)))
+    if (!(uvisor_ctx->pc = new RawSerial(USBTX, USBRX))) {
         return;
+    }
 
     /* Create the buffer and cache its pointer to the private static memory. */
     uvisor_ctx->buffer = (uint32_t *) malloc(PRIVATE_BUTTON_BUFFER_COUNT * sizeof(uint32_t));
     if (uvisor_ctx->buffer == NULL) {
-        uvisor_ctx->pc->printf("ERROR: Failed to allocate memory for the button buffer\r\n");
+        uvisor_ctx->pc->printf("ERROR: Failed to allocate memory for the button buffer\n");
         mbed_die();
     }
     uvisor_ctx->index = 0;
@@ -286,7 +288,7 @@ A few things to note in the code above:
 
 - If code runs in the context of `private_button`, then any object instantiated inside that code belongs to the `private_button` heap and stack. This means that in the example above, the `InterruptIn` object is private to the `private_button` box. The same applies to the dynamically allocated buffer `uvisor_ctx->buffer`.
 - You can access the content of the private memory `PrivateButtonStaticMemory` using the `void * const __uvisor_ctx` pointer, which uVisor maintains. You need to cast this pointer to your own context type. In this example we used a pre-processor symbol to improve readability.
-- The `InterruptIn` object triggers the registration of an interrupt slot. Because that code runs in the context of the `private_button` box, the push-button IRQ belongs to that box. If you want to use the IRQ APIs directly, read the [NVIC APIs section](#the-nvic-apis) below.
+- The `InterruptIn` object triggers the registration of an interrupt slot using the NVIC APIs. If you want to use the IRQ APIs directly, read the [NVIC APIs section](#the-nvic-apis) below. We registered the push-button IRQ to the `private_button` box through an IRQ ACL, and hence only code from this box can access it. Changing the push-button IRQ state from the public box causes a uVisor fault.
 - Even if the `private_button_on_press` function runs in the context of `private_button`, you can still use the `printf` function, which accesses the `UART0` peripheral, owned by the public box. This is because all ACLs declared in the public box are by default shared with all the other secure boxes. This also means that the messages we are printing on the serial port are not secure because other boxes have access to that peripheral.
 
 > **Warning**: Instantiating an object in the `secure_box.cpp` global scope automatically maps it to the public box context, not the `private_button` one. If you want an object to be private to a box, you need to instantiate it inside the code that runs in the context of that box (such as the `InterruptIn` object), or alternatively statically initialize it in the box private static memory (such as the `buffer`, `index` and `counter` variables in `PrivateButtonStaticMemory`).
@@ -394,7 +396,7 @@ To call the public secure entry point from any other box, you can use the `secur
 ```cpp
 /* ~/code/uvisor-example/source/main.cpp */
 
-#include "secure-box.h"
+#include "secure_box.h"
 ```
 
 Then replace the `main` function with:
@@ -406,7 +408,7 @@ int main(void)
 {
     while (true) {
         led = !led;
-        printf("Secure index is %d\r\n", secure_get_index());
+        printf("Secure index is %d\n", secure_get_index());
         Thread::wait(500);
     }
 }
@@ -422,26 +424,12 @@ When the uVisor is enabled, all NVIC APIs are rerouted to the corresponding uVis
 
 - The uVisor owns the interrupt vector table.
 - All ISRs are relocated to SRAM.
-- Code in a box can only change the state of an IRQ (enable it, change its priority, etc.) if the box registered that IRQ with uVisor at runtime, using the `NVIC_SetVector` API.
+- Code in a box can only change the state of an IRQ (enable it, change its priority and so on) if the box registered that IRQ with uVisor through an IRQ ACL.
 - An IRQ that belongs to a box can only be modified when that box context is active.
 
-Although this behavior is different from that of the original NVIC, it is backward compatible. Legacy code (such as a device HAL) still works after uVisor is enabled. The general use case is the following:
+Although this behavior is different from that of the original NVIC, it is backward compatible. Legacy code (such as a device HAL) still works after uVisor is enabled.
 
-```C
-#define MY_IRQ 42
-
-/* Set the ISR for MY_IRQ at runtime.
- * Without uVisor: Relocate the interrupt vector table to SRAM and set my_isr as
-                   the ISR for MY_IRQ.
- * With    uVisor: Register MY_IRQ for the current box with my_isr as ISR. */
-NVIC_SetVector(MY_IRQ, &my_isr);
-
-/* Change the IRQ state. */
-NVIC_SetPriority(MY_IRQ, 3);
-NVIC_EnableIRQ(MY_IRQ);
-```
-
-> **Note**: In this model, a call to `NVIC_SetVector` must happen before an IRQ state changes. In platforms that don't relocate the interrupt vector table, such a call might be absent and must be added to work with uVisor.
+All IRQ slots that are not listed in any box ACL list are considered unclaimed. Boxes can gain exclusive ownership of unclaimed IRQs on a first-come first-served basis through the use of the NVIC APIs.
 
 ## The *public box* ACLs
 
@@ -463,16 +451,17 @@ Once the uVisor debug messages are enabled, your application fails. The failure 
                     BUS FAULT
 ***********************************************************
 
-...
+* Active Box ID: 0
+* FAULT SYNDROME REGISTERS
 
-/* MEMORY MAP
-  Address:           0x4004800C
-  Region/Peripheral: SIM
-    Base address:    0x40047000
-    End address:     0x40048060
+  CFSR: 0x00008200
+  BFAR: 0x40048044
+  --> PRECISERR: precise data access.
 
 ...
 ```
+
+Look up the faulty address (the value of BFAR) in the target device reference manual.
 
 Once you know which peripheral is causing the fault (the `SIM` peripheral, in this example), add its entry to the ACLs list:
 
@@ -493,5 +482,6 @@ Repeat the process multiple times until all ACLs have been added to the list. Wh
 
 - [uVisor API documentation](API.md).
 - [Debugging uVisor on mbed OS](DEBUGGING.md).
+- [Using nonvolatile storage from uVisor on mbed OS](manual/Flash.md).
 
 If you found any bug or inconsistency in this guide, please [raise an issue](https://github.com/ARMmbed/uvisor/issues/new).

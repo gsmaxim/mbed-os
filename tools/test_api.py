@@ -28,6 +28,7 @@ import argparse
 import datetime
 import threading
 import ctypes
+import functools
 from types import ListType
 from colorama import Fore, Back, Style
 from prettytable import PrettyTable
@@ -50,6 +51,7 @@ from tools.utils import NotSupportedException
 from tools.utils import construct_enum
 from tools.memap import MemapParser
 from tools.targets import TARGET_MAP
+import tools.test_configs as TestConfig
 from tools.test_db import BaseDBAccess
 from tools.build_api import build_project, build_mbed_libs, build_lib
 from tools.build_api import get_target_supported_toolchains
@@ -70,7 +72,6 @@ from tools.utils import argparse_filestring_type
 from tools.utils import argparse_uppercase_type
 from tools.utils import argparse_lowercase_type
 from tools.utils import argparse_many
-from tools.utils import get_path_depth
 
 import tools.host_tests.host_tests_plugins as host_tests_plugins
 
@@ -365,6 +366,7 @@ class SingleTestRunner(object):
             clean_mbed_libs_options = True if self.opts_goanna_for_mbed_sdk or clean or self.opts_clean else None
 
             profile = extract_profile(self.opts_parser, self.opts, toolchain)
+            stats_depth = self.opts.stats_depth or 2
 
 
             try:
@@ -481,22 +483,13 @@ class SingleTestRunner(object):
 
                 project_name = self.opts_firmware_global_name if self.opts_firmware_global_name else None
                 try:
-                    path = build_project(test.source_dir,
-                                     join(build_dir, test_id),
-                                     T,
-                                     toolchain,
-                                     test.dependencies,
-                                     clean=clean_project_options,
-                                     verbose=self.opts_verbose,
-                                     name=project_name,
-                                     macros=MACROS,
-                                     inc_dirs=INC_DIRS,
-                                     jobs=self.opts_jobs,
-                                     report=build_report,
-                                     properties=build_properties,
-                                     project_id=test_id,
-                                     project_description=test.get_description(),
-                                     build_profile=profile)
+                    path = build_project(test.source_dir, join(build_dir, test_id), T,
+                        toolchain, test.dependencies, clean=clean_project_options,
+                        verbose=self.opts_verbose, name=project_name, macros=MACROS,
+                        inc_dirs=INC_DIRS, jobs=self.opts_jobs, report=build_report,
+                        properties=build_properties, project_id=test_id,
+                        project_description=test.get_description(),
+                        build_profile=profile, stats_depth=stats_depth)
 
                 except Exception, e:
                     project_name_str = project_name if project_name is not None else test_id
@@ -1651,10 +1644,9 @@ def detect_database_verbose(db_url):
 
 
 def get_module_avail(module_name):
-    """ This function returns True if module_name is already impored module
+    """ This function returns True if module_name is already imported module
     """
     return module_name in sys.modules.keys()
-
 
 def get_autodetected_MUTS_list(platform_name_filter=None):
     oldError = None
@@ -1987,6 +1979,12 @@ def get_default_test_options_parser():
                         default=False,
                         action="store_true",
                         help='Prints script version and exits')
+
+    parser.add_argument('--stats-depth',
+                        dest='stats_depth',
+                        default=2,
+                        type=int,
+                        help="Depth level for static memory report")
     return parser
 
 def test_path_to_name(path, base):
@@ -2001,6 +1999,19 @@ def test_path_to_name(path, base):
 
     return "-".join(name_parts).lower()
 
+def get_test_config(config_name, target_name):
+    """Finds the path to a test configuration file
+    config_name: path to a custom configuration file OR mbed OS interface "ethernet, wifi_odin, etc"
+    target_name: name of target to determing if mbed OS interface given is valid
+    returns path to config, will return None if no valid config is found
+    """
+    # If they passed in a full path
+    if exists(config_name):
+        # This is a module config
+        return config_name
+    # Otherwise find the path to configuration file based on mbed OS interface
+    return TestConfig.get_config_path(config_name, target_name)
+
 def find_tests(base_dir, target_name, toolchain_name, app_config=None):
     """ Finds all tests in a directory recursively
     base_dir: path to the directory to scan for tests (ex. 'path/to/project')
@@ -2008,9 +2019,15 @@ def find_tests(base_dir, target_name, toolchain_name, app_config=None):
     toolchain_name: name of the toolchain to use for scanning (ex. 'GCC_ARM')
     options: Compile options to pass to the toolchain (ex. ['debug-info'])
     app_config - location of a chosen mbed_app.json file
+
+    returns a dictionary where keys are the test name, and the values are
+    lists of paths needed to biuld the test.
     """
 
+    # Temporary structure: tests referenced by (name, base, group, case) tuple
     tests = {}
+    # List of common folders: (predicate function, path) tuple
+    commons = []
 
     # Prepare the toolchain
     toolchain = prepare_toolchain([base_dir], None, target_name, toolchain_name,
@@ -2031,32 +2048,52 @@ def find_tests(base_dir, target_name, toolchain_name, app_config=None):
             # Loop through all subdirectories
             for d in test_resources.inc_dirs:
 
-                # If the test case folder is not called 'host_tests' and it is
+                # If the test case folder is not called 'host_tests' or 'COMMON' and it is
                 # located two folders down from the main 'TESTS' folder (ex. TESTS/testgroup/testcase)
                 # then add it to the tests
-                path_depth = get_path_depth(relpath(d, walk_base_dir))
-                if path_depth == 2:
+                relative_path = relpath(d, walk_base_dir)
+                relative_path_parts = os.path.normpath(relative_path).split(os.sep)
+                if len(relative_path_parts) == 2:
                     test_group_directory_path, test_case_directory = os.path.split(d)
                     test_group_directory = os.path.basename(test_group_directory_path)
-                    
-                    # Check to make sure discoverd folder is not in a host test directory
-                    if test_case_directory != 'host_tests' and test_group_directory != 'host_tests':
-                        test_name = test_path_to_name(d, base_dir)
-                        tests[test_name] = d
 
-    return tests
+                    # Check to make sure discoverd folder is not in a host test directory or common directory
+                    special_dirs = ['host_tests', 'COMMON']
+                    if test_group_directory not in special_dirs and test_case_directory not in special_dirs:
+                        test_name = test_path_to_name(d, base_dir)
+                        tests[(test_name, walk_base_dir, test_group_directory, test_case_directory)] = [d]
+
+                # Also find any COMMON paths, we'll add these later once we find all the base tests
+                if 'COMMON' in relative_path_parts:
+                    if relative_path_parts[0] != 'COMMON':
+                        def predicate(base_pred, group_pred, (name, base, group, case)):
+                            return base == base_pred and group == group_pred
+                        commons.append((functools.partial(predicate, walk_base_dir, relative_path_parts[0]), d))
+                    else:
+                        def predicate(base_pred, (name, base, group, case)):
+                            return base == base_pred
+                        commons.append((functools.partial(predicate, walk_base_dir), d))
+
+    # Apply common directories
+    for pred, path in commons:
+        for test_identity, test_paths in tests.iteritems():
+            if pred(test_identity):
+                test_paths.append(path)
+
+    # Drop identity besides name
+    return {name: paths for (name, _, _, _), paths in tests.iteritems()}
 
 def print_tests(tests, format="list", sort=True):
     """Given a dictionary of tests (as returned from "find_tests"), print them
     in the specified format"""
     if format == "list":
         for test_name in sorted(tests.keys()):
-            test_path = tests[test_name]
+            test_path = tests[test_name][0]
             print "Test Case:"
             print "    Name: %s" % test_name
             print "    Path: %s" % test_path
     elif format == "json":
-        print json.dumps(tests, indent=2)
+        print json.dumps({test_name: test_path[0] for test_name, test_paths in tests}, indent=2)
     else:
         print "Unknown format '%s'" % format
         sys.exit(1)
@@ -2122,7 +2159,7 @@ def build_tests(tests, base_source_paths, build_path, target, toolchain_name,
                 clean=False, notify=None, verbose=False, jobs=1, macros=None,
                 silent=False, report=None, properties=None,
                 continue_on_build_fail=False, app_config=None,
-                build_profile=None):
+                build_profile=None, stats_depth=None):
     """Given the data structure from 'find_tests' and the typical build parameters,
     build all the tests
 
@@ -2153,13 +2190,16 @@ def build_tests(tests, base_source_paths, build_path, target, toolchain_name,
     jobs_count = int(jobs if jobs else cpu_count())
     p = Pool(processes=jobs_count)
     results = []
-    for test_name, test_path in tests.iteritems():
-        test_build_path = os.path.join(build_path, test_path)
-        src_path = base_source_paths + [test_path]
+    for test_name, test_paths in tests.iteritems():
+        if type(test_paths) != ListType:
+            test_paths = [test_paths]
+
+        test_build_path = os.path.join(build_path, test_paths[0])
+        src_paths = base_source_paths + test_paths
         bin_file = None
-        test_case_folder_name = os.path.basename(test_path)
-        
-        args = (src_path, test_build_path, target, toolchain_name)
+        test_case_folder_name = os.path.basename(test_paths[0])
+
+        args = (src_paths, test_build_path, target, toolchain_name)
         kwargs = {
             'jobs': 1,
             'clean': clean,
@@ -2172,9 +2212,10 @@ def build_tests(tests, base_source_paths, build_path, target, toolchain_name,
             'app_config': app_config,
             'build_profile': build_profile,
             'silent': True,
-            'toolchain_paths': TOOLCHAIN_PATHS
+            'toolchain_paths': TOOLCHAIN_PATHS,
+            'stats_depth': stats_depth
         }
-        
+
         results.append(p.apply_async(build_test_worker, args, kwargs))
 
     p.close()
@@ -2196,10 +2237,11 @@ def build_tests(tests, base_source_paths, build_path, target, toolchain_name,
                         results.remove(r)
 
                         # Take report from the kwargs and merge it into existing report
-                        report_entry = worker_result['kwargs']['report'][target_name][toolchain_name]
-                        for test_key in report_entry.keys():
-                            report[target_name][toolchain_name][test_key] = report_entry[test_key]
-                        
+                        if report:
+                            report_entry = worker_result['kwargs']['report'][target_name][toolchain_name]
+                            for test_key in report_entry.keys():
+                                report[target_name][toolchain_name][test_key] = report_entry[test_key]
+
                         # Set the overall result to a failure if a build failure occurred
                         if ('reason' in worker_result and
                             not worker_result['reason'] and
@@ -2222,7 +2264,8 @@ def build_tests(tests, base_source_paths, build_path, target, toolchain_name,
                             }
 
                             test_key = worker_result['kwargs']['project_id'].upper()
-                            print report[target_name][toolchain_name][test_key][0][0]['output'].rstrip()
+                            if report:
+                                print report[target_name][toolchain_name][test_key][0][0]['output'].rstrip()
                             print 'Image: %s\n' % bin_file
 
                     except:

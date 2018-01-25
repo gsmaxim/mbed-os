@@ -18,7 +18,6 @@
 #define __UVISOR_API_VMPU_EXPORTS_H__
 
 #include "api/inc/uvisor_exports.h"
-#include "api/inc/pool_queue_exports.h"
 #include <stdint.h>
 
 /* The maximum box namespace length is 37 so that it is exactly big enough for
@@ -243,7 +242,8 @@ typedef struct {
 #if defined(UVISOR_PRESENT) && UVISOR_PRESENT == 1
 static UVISOR_FORCEINLINE int vmpu_bits(uint32_t size)
 {
-    return 32 - __builtin_clz(size);
+    /* If size is 0, the result of __builtin_clz is undefined */
+    return (0 == size) ? 0: 32 - __builtin_clz(size);
 }
 #endif /* defined(UVISOR_PRESENT) && UVISOR_PRESENT == 1 */
 

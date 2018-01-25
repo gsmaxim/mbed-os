@@ -1,5 +1,45 @@
 # Change Log
 
+## [v4.1.1](https://github.com/ARMmbed/mbed-coap/releases/tag/v4.1.1) 
+**Closed issues:**
+-  IOTCLT-2203 mbed-coap does not handle PUT or POST if they indicate a smaller block size preference (fixed regression) 
+
+-[Full Changelog](https://github.com/ARMmbed/mbed-coap/compare/v4.1.0...v4.1.1)
+
+## [v4.1.0](https://github.com/ARMmbed/mbed-coap/releases/tag/v4.1.0) 
+
+-[Full Changelog](https://github.com/ARMmbed/mbed-coap/compare/v4.0.10...v4.1.0)
+
+ **New feature:**
+  - New API to disable automatic GET(BLOCK2) request sending.
+
+ **Closed issues:**
+  -  IOTCLT-2203 mbed-coap does not handle PUT or POST if they indicate a smaller block size preference 
+
+## [v4.0.10](https://github.com/ARMmbed/mbed-coap/releases/tag/v4.0.10) 
+
+-[Full Changelog](https://github.com/ARMmbed/mbed-coap/compare/v4.0.9...v4.0.10)
+
+ **Closed issues:**
+  -  IOTMAC-615 Node mDS registration failure during OTA transfer
+
+## [v4.0.9](https://github.com/ARMmbed/mbed-coap/releases/tag/v4.0.9) 
+
+-[Full Changelog](https://github.com/ARMmbed/mbed-coap/compare/v4.0.8...v4.0.9)
+
+ **Closed issues:**
+  -  IOTCLT-1899 Maximum COAP message resending buffer size limited to 255 bytes
+  -  IOTCLT-1888 Problem with blockwise transfers that are even increments of block_size
+
+## [v4.0.8](https://github.com/ARMmbed/mbed-coap/releases/tag/v4.0.8) 
+
+-[Full Changelog](https://github.com/ARMmbed/mbed-coap/compare/v4.0.4...v4.0.8)
+
+ **Closed issues:**
+  -  IOTCLT-1880 Lwm2m blockwise data transfer (using Block1 option) with Leshan not working
+  -  IOTCLT-1885 Return 4.08 Request Entity Incomplete on Block transfer errors
+  -  IOTCLT-1883 Detected message duplications stop mbed-client
+
 ## [v4.0.4](https://github.com/ARMmbed/mbed-coap/releases/tag/v4.0.4) 
 
 -[Full Changelog](https://github.com/ARMmbed/mbed-coap/compare/v4.0.3...v4.0.4)

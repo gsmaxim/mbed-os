@@ -32,9 +32,16 @@
 namespace rtos {
 /** \addtogroup rtos */
 /** @{*/
-
+/**
+ * \defgroup rtos_Mutex Mutex class
+ * @{
+ */
+ 
 /** The Mutex class is used to synchronize the execution of threads.
  This is for example used to protect access to a shared resource.
+
+ @note You cannot use member functions of this class in ISR context. If you require Mutex functionality within
+ ISR handler, consider using @a Semaphore.
 
  @note
  Memory considerations: The mutex control structures will be created on current thread's stack, both for the mbed OS
@@ -42,42 +49,75 @@ namespace rtos {
 */
 class Mutex : private mbed::NonCopyable<Mutex> {
 public:
-    /** Create and Initialize a Mutex object */
+    /** Create and Initialize a Mutex object
+     *
+     * @note You cannot call this function from ISR context.
+    */
     Mutex();
 
     /** Create and Initialize a Mutex object
 
      @param name name to be used for this mutex. It has to stay allocated for the lifetime of the thread.
+
+     @note You cannot call this function from ISR context.
     */
     Mutex(const char *name);
 
     /** Wait until a Mutex becomes available.
       @param   millisec  timeout value or 0 in case of no time-out. (default: osWaitForever)
-      @return  status code that indicates the execution status of the function.
+      @return  status code that indicates the execution status of the function:
+               @a osOK the mutex has been obtained.
+               @a osErrorTimeout the mutex could not be obtained in the given time.
+               @a osErrorParameter internal error.
+               @a osErrorResource the mutex could not be obtained when no timeout was specified.
+               @a osErrorISR this function cannot be called from the interrupt service routine.
+
+      @note You cannot call this function from ISR context.
      */
     osStatus lock(uint32_t millisec=osWaitForever);
 
     /** Try to lock the mutex, and return immediately
-      @return  true if the mutex was acquired, false otherwise.
+      @return true if the mutex was acquired, false otherwise.
+
+      @note This function cannot be called from ISR context.
      */
     bool trylock();
 
     /** Unlock the mutex that has previously been locked by the same thread
-      @return  status code that indicates the execution status of the function.
+      @return status code that indicates the execution status of the function:
+              @a osOK the mutex has been released.
+              @a osErrorParameter internal error.
+              @a osErrorResource the mutex was not locked or the current thread wasn't the owner.
+              @a osErrorISR this function cannot be called from the interrupt service routine.
+
+      @note This function cannot be called from ISR context.
      */
     osStatus unlock();
 
+    /** Get the owner the this mutex
+      @return  the current owner of this mutex.
+
+      @note You cannot call this function from ISR context.
+     */
+    osThreadId get_owner();
+
+    /** Mutex destructor
+     *
+     * @note You cannot call this function from ISR context.
+     */
     ~Mutex();
 
 private:
     void constructor(const char *name = NULL);
+    friend class ConditionVariable;
 
     osMutexId_t               _id;
-    osMutexAttr_t             _attr;
     mbed_rtos_storage_mutex_t _obj_mem;
+    uint32_t                  _count;
 };
-
+/** @}*/
+/** @}*/
 }
 #endif
 
-/** @}*/
+

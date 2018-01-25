@@ -32,12 +32,13 @@
 #include "lwip/tcp.h"
 #include "lwip/ip.h"
 #include "lwip/mld6.h"
+#include "lwip/igmp.h"
 #include "lwip/dns.h"
 #include "lwip/udp.h"
+#include "lwip_errno.h"
 #include "netif/lwip_ethernet.h"
 #include "emac_api.h"
 #include "ppp_lwip.h"
-#include "lwip_tcp_isn.h"
 
 static nsapi_error_t mbed_lwip_err_remap(err_t err);
 
@@ -45,6 +46,10 @@ static nsapi_error_t mbed_lwip_err_remap(err_t err);
     #define MBED_NETIF_INIT_FN emac_lwip_if_init
 #else
     #define MBED_NETIF_INIT_FN eth_arch_enetif_init
+#endif
+
+#ifndef LWIP_SOCKET_MAX_MEMBERSHIPS
+    #define LWIP_SOCKET_MAX_MEMBERSHIPS 4
 #endif
 
 /* Static arena of sockets */
@@ -57,12 +62,38 @@ static struct lwip_socket {
 
     void (*cb)(void *);
     void *data;
+
+    // Track multicast addresses subscribed to by this socket
+    nsapi_ip_mreq_t *multicast_memberships;
+    uint32_t         multicast_memberships_count;
+    uint32_t         multicast_memberships_registry;
+
 } lwip_arena[MEMP_NUM_NETCONN];
 
 static bool lwip_inited = false;
 static bool lwip_connected = false;
 static bool netif_inited = false;
 static bool netif_is_ppp = false;
+
+static nsapi_error_t mbed_lwip_setsockopt(nsapi_stack_t *stack, nsapi_socket_t handle, int level, int optname, const void *optval, unsigned optlen);
+
+static inline uint32_t next_registered_multicast_member(const struct lwip_socket *s, uint32_t index) {
+    while (!(s->multicast_memberships_registry & (0x0001 << index))) { index++; }
+    return index;
+}
+
+static inline uint32_t next_free_multicast_member(const struct lwip_socket *s, uint32_t index) {
+    while ((s->multicast_memberships_registry & (0x0001 << index))) { index++; }
+    return index;
+}
+
+static inline void set_multicast_member_registry_bit(struct lwip_socket *s, uint32_t index) {
+    s->multicast_memberships_registry |= (0x0001 << index);
+}
+
+static inline void clear_multicast_member_registry_bit(struct lwip_socket *s, uint32_t index) {
+    s->multicast_memberships_registry &= ~(0x0001 << index);
+}
 
 static struct lwip_socket *mbed_lwip_arena_alloc(void)
 {
@@ -85,6 +116,18 @@ static struct lwip_socket *mbed_lwip_arena_alloc(void)
 static void mbed_lwip_arena_dealloc(struct lwip_socket *s)
 {
     s->in_use = false;
+
+    while (s->multicast_memberships_count > 0) {
+        uint32_t index = 0;
+        index = next_registered_multicast_member(s, index);
+
+        mbed_lwip_setsockopt(NULL, s, NSAPI_SOCKET, NSAPI_DROP_MEMBERSHIP, &s->multicast_memberships[index],
+            sizeof(s->multicast_memberships[index]));
+        index++;
+    }
+
+    free(s->multicast_memberships);
+    s->multicast_memberships = NULL;
 }
 
 static void mbed_lwip_socket_callback(struct netconn *nc, enum netconn_evt eh, u16_t len)
@@ -198,9 +241,9 @@ static bool convert_lwip_addr_to_mbed(nsapi_addr_t *out, const ip_addr_t *in)
 #endif
 }
 
+#if LWIP_IPV4
 static const ip_addr_t *mbed_lwip_get_ipv4_addr(const struct netif *netif)
 {
-#if LWIP_IPV4
     if (!netif_is_up(netif)) {
         return NULL;
     }
@@ -208,14 +251,15 @@ static const ip_addr_t *mbed_lwip_get_ipv4_addr(const struct netif *netif)
     if (!ip4_addr_isany(netif_ip4_addr(netif))) {
         return netif_ip_addr4(netif);
     }
-#endif
 
     return NULL;
 }
+#endif
 
+#if LWIP_IPV6
 static const ip_addr_t *mbed_lwip_get_ipv6_addr(const struct netif *netif)
 {
-#if LWIP_IPV6
+
     if (!netif_is_up(netif)) {
         return NULL;
     }
@@ -226,10 +270,40 @@ static const ip_addr_t *mbed_lwip_get_ipv6_addr(const struct netif *netif)
             return netif_ip_addr6(netif, i);
         }
     }
-#endif
 
     return NULL;
+}
+#endif
 
+static bool mbed_lwip_is_local_addr(const ip_addr_t *ip_addr)
+{
+    struct netif *netif;
+
+    for (netif = netif_list; netif != NULL; netif = netif->next) {
+        if (!netif_is_up(netif)) {
+            continue;
+        }
+#if LWIP_IPV6
+        if (IP_IS_V6(ip_addr)) {
+            for (int i = 0; i < LWIP_IPV6_NUM_ADDRESSES; i++) {
+                if (ip6_addr_isvalid(netif_ip6_addr_state(netif, i)) &&
+                    ip6_addr_cmp(netif_ip6_addr(netif, i), ip_2_ip6(ip_addr))) {
+                    return true;
+                }
+            }
+        }
+#endif
+
+#if LWIP_IPV4
+        if (IP_IS_V4(ip_addr)) {
+            if (!ip4_addr_isany(netif_ip4_addr(netif)) &&
+                ip4_addr_cmp(netif_ip4_addr(netif), ip_2_ip4(ip_addr))) {
+                return true;
+            }
+        }
+#endif
+    }
+    return false;
 }
 
 const ip_addr_t *mbed_lwip_get_ip_addr(bool any_addr, const struct netif *netif)
@@ -237,12 +311,18 @@ const ip_addr_t *mbed_lwip_get_ip_addr(bool any_addr, const struct netif *netif)
     const ip_addr_t *pref_ip_addr = 0;
     const ip_addr_t *npref_ip_addr = 0;
 
+#if LWIP_IPV4 && LWIP_IPV6
 #if IP_VERSION_PREF == PREF_IPV4
     pref_ip_addr = mbed_lwip_get_ipv4_addr(netif);
     npref_ip_addr = mbed_lwip_get_ipv6_addr(netif);
 #else
     pref_ip_addr = mbed_lwip_get_ipv6_addr(netif);
     npref_ip_addr = mbed_lwip_get_ipv4_addr(netif);
+#endif
+#elif LWIP_IPV6
+    pref_ip_addr = mbed_lwip_get_ipv6_addr(netif);
+#elif LWIP_IPV4
+    pref_ip_addr = mbed_lwip_get_ipv4_addr(netif);
 #endif
 
     if (pref_ip_addr) {
@@ -254,15 +334,48 @@ const ip_addr_t *mbed_lwip_get_ip_addr(bool any_addr, const struct netif *netif)
     return NULL;
 }
 
+static void add_dns_addr_to_dns_list_index(const u8_t addr_type, const u8_t index)
+{
+#if LWIP_IPV6
+    if (addr_type == IPADDR_TYPE_V6) {
+        /* 2001:4860:4860::8888 google */
+        ip_addr_t ipv6_dns_addr = IPADDR6_INIT(
+                PP_HTONL(0x20014860UL),
+                PP_HTONL(0x48600000UL),
+                PP_HTONL(0x00000000UL),
+                PP_HTONL(0x00008888UL));
+        dns_setserver(index, &ipv6_dns_addr);
+    }
+#endif
+#if LWIP_IPV4
+    if (addr_type == IPADDR_TYPE_V4) {
+        /* 8.8.8.8 google */
+        ip_addr_t ipv4_dns_addr = IPADDR4_INIT(0x08080808);
+        dns_setserver(index, &ipv4_dns_addr);
+    }
+#endif
+}
+
+static int get_ip_addr_type(const ip_addr_t *ip_addr)
+{
+#if LWIP_IPV6
+    if (IP_IS_V6(ip_addr)) {
+        return IPADDR_TYPE_V6;
+    }
+#endif
+#if LWIP_IPV4
+    if (IP_IS_V4(ip_addr)) {
+        return IPADDR_TYPE_V4;
+    }
+#endif
+#if LWIP_IPV6 && LWIP_IPV4
+    return IPADDR_TYPE_ANY;
+#endif
+}
+
 void add_dns_addr(struct netif *lwip_netif)
 {
-    // Do nothing if not brought up
-    const ip_addr_t *ip_addr = mbed_lwip_get_ip_addr(true, lwip_netif);
-    if (!ip_addr) {
-        return;
-    }
-
-    // Check for existing dns server
+    // Check for existing dns address
     for (char numdns = 0; numdns < DNS_MAX_SERVERS; numdns++) {
         const ip_addr_t *dns_ip_addr = dns_getserver(numdns);
         if (!ip_addr_isany(dns_ip_addr)) {
@@ -270,23 +383,41 @@ void add_dns_addr(struct netif *lwip_netif)
         }
     }
 
-#if LWIP_IPV6
-    if (IP_IS_V6(ip_addr)) {
-        /* 2001:4860:4860::8888 google */
-        ip_addr_t ipv6_dns_addr = IPADDR6_INIT(
-                PP_HTONL(0x20014860UL),
-                PP_HTONL(0x48600000UL),
-                PP_HTONL(0x00000000UL),
-                PP_HTONL(0x00008888UL));
-        dns_setserver(0, &ipv6_dns_addr);
-    }
-#endif
+    // Get preferred ip version
+    const ip_addr_t *ip_addr = mbed_lwip_get_ip_addr(false, lwip_netif);
+    u8_t addr_type = IPADDR_TYPE_ANY;
 
-#if LWIP_IPV4
-    if (IP_IS_V4(ip_addr)) {
-        /* 8.8.8.8 google */
-        ip_addr_t ipv4_dns_addr = IPADDR4_INIT(0x08080808);
-        dns_setserver(0, &ipv4_dns_addr);
+    // Add preferred ip version dns address to index 0
+    if (ip_addr) {
+        addr_type = get_ip_addr_type(ip_addr);
+        add_dns_addr_to_dns_list_index(addr_type, 0);
+    }
+
+#if LWIP_IPV4 && LWIP_IPV6
+    if (!ip_addr) {
+        // Get address for any ip version
+        ip_addr = mbed_lwip_get_ip_addr(true, lwip_netif);
+        if (!ip_addr) {
+            return;
+        }
+        addr_type = get_ip_addr_type(ip_addr);
+        // Add the dns address to index 0
+        add_dns_addr_to_dns_list_index(addr_type, 0);
+    }
+
+    if (addr_type == IPADDR_TYPE_V4) {
+        // If ipv4 is preferred and ipv6 is available add ipv6 dns address to index 1
+        ip_addr = mbed_lwip_get_ipv6_addr(lwip_netif);
+    } else if (addr_type == IPADDR_TYPE_V6) {
+        // If ipv6 is preferred and ipv4 is available add ipv4 dns address to index 1
+        ip_addr = mbed_lwip_get_ipv4_addr(lwip_netif);
+    } else {
+        ip_addr = NULL;
+    }
+
+    if (ip_addr) {
+        addr_type = get_ip_addr_type(ip_addr);
+        add_dns_addr_to_dns_list_index(addr_type, 1);
     }
 #endif
 }
@@ -308,25 +439,38 @@ static void mbed_lwip_netif_link_irq(struct netif *lwip_netif)
     }
 }
 
-static sys_sem_t lwip_netif_has_addr;
+static char lwip_has_addr_state = 0;
+
+#define HAS_ANY_ADDR  1
+static sys_sem_t lwip_netif_has_any_addr;
+#if PREF_ADDR_TIMEOUT
+#define HAS_PREF_ADDR 2
+static sys_sem_t lwip_netif_has_pref_addr;
+#endif
+#if BOTH_ADDR_TIMEOUT
+#define HAS_BOTH_ADDR 4
+static sys_sem_t lwip_netif_has_both_addr;
+#endif
+
 static void mbed_lwip_netif_status_irq(struct netif *lwip_netif)
 {
-    static bool any_addr = true;
-
     if (netif_is_up(lwip_netif)) {
-        // Indicates that has address
-        if (any_addr == true && mbed_lwip_get_ip_addr(true, lwip_netif)) {
-            sys_sem_signal(&lwip_netif_has_addr);
-            any_addr = false;
-            return;
+        if (!(lwip_has_addr_state & HAS_ANY_ADDR) && mbed_lwip_get_ip_addr(true, lwip_netif)) {
+            sys_sem_signal(&lwip_netif_has_any_addr);
+            lwip_has_addr_state |= HAS_ANY_ADDR;
         }
-
-        // Indicates that has preferred address
-        if (mbed_lwip_get_ip_addr(false, lwip_netif)) {
-            sys_sem_signal(&lwip_netif_has_addr);
+#if PREF_ADDR_TIMEOUT
+        if (!(lwip_has_addr_state & HAS_PREF_ADDR) && mbed_lwip_get_ip_addr(false, lwip_netif)) {
+            sys_sem_signal(&lwip_netif_has_pref_addr);
+            lwip_has_addr_state |= HAS_PREF_ADDR;
         }
-    } else {
-        any_addr = true;
+#endif
+#if BOTH_ADDR_TIMEOUT
+        if (!(lwip_has_addr_state & HAS_BOTH_ADDR) && mbed_lwip_get_ipv4_addr(lwip_netif) && mbed_lwip_get_ipv6_addr(lwip_netif)) {
+            sys_sem_signal(&lwip_netif_has_both_addr);
+            lwip_has_addr_state |= HAS_BOTH_ADDR;
+        }
+#endif
     }
 }
 
@@ -436,8 +580,13 @@ static void mbed_lwip_core_init(void)
         sys_sem_new(&lwip_tcpip_inited, 0);
         sys_sem_new(&lwip_netif_linked, 0);
         sys_sem_new(&lwip_netif_unlinked, 0);
-        sys_sem_new(&lwip_netif_has_addr, 0);
-
+        sys_sem_new(&lwip_netif_has_any_addr, 0);
+#if PREF_ADDR_TIMEOUT
+        sys_sem_new(&lwip_netif_has_pref_addr, 0);
+#endif
+#if BOTH_ADDR_TIMEOUT
+        sys_sem_new(&lwip_netif_has_both_addr, 0);
+#endif
         tcpip_init(mbed_lwip_tcpip_init_irq, NULL);
         sys_arch_sem_wait(&lwip_tcpip_inited, 0);
 
@@ -488,10 +637,10 @@ nsapi_error_t mbed_lwip_init(emac_interface_t *emac)
 // Backwards compatibility with people using DEVICE_EMAC
 nsapi_error_t mbed_lwip_bringup(bool dhcp, const char *ip, const char *netmask, const char *gw)
 {
-    return mbed_lwip_bringup_2(dhcp, false, ip, netmask, gw);
+    return mbed_lwip_bringup_2(dhcp, false, ip, netmask, gw, DEFAULT_STACK);
 }
 
-nsapi_error_t mbed_lwip_bringup_2(bool dhcp, bool ppp, const char *ip, const char *netmask, const char *gw)
+nsapi_error_t mbed_lwip_bringup_2(bool dhcp, bool ppp, const char *ip, const char *netmask, const char *gw, const nsapi_ip_stack_t stack)
 {
     // Check if we've already connected
     if (lwip_connected) {
@@ -510,7 +659,7 @@ nsapi_error_t mbed_lwip_bringup_2(bool dhcp, bool ppp, const char *ip, const cha
         }
     } else {
         if (ppp) {
-            ret = ppp_lwip_if_init(&lwip_netif);
+            ret = ppp_lwip_if_init(&lwip_netif, stack);
         } else {
             ret = mbed_lwip_emac_init(NULL);
         }
@@ -530,43 +679,49 @@ nsapi_error_t mbed_lwip_bringup_2(bool dhcp, bool ppp, const char *ip, const cha
     netif_set_status_callback(&lwip_netif, mbed_lwip_netif_status_irq);
 
 #if LWIP_IPV6
-    if (lwip_netif.hwaddr_len == ETH_HWADDR_LEN) {
-        netif_create_ip6_linklocal_address(&lwip_netif, 1/*from MAC*/);
-    }
+    if (stack != IPV4_STACK) {
+        if (lwip_netif.hwaddr_len == ETH_HWADDR_LEN) {
+            netif_create_ip6_linklocal_address(&lwip_netif, 1/*from MAC*/);
+        }
 
 #if LWIP_IPV6_MLD
-  /*
-   * For hardware/netifs that implement MAC filtering.
-   * All-nodes link-local is handled by default, so we must let the hardware know
-   * to allow multicast packets in.
-   * Should set mld_mac_filter previously. */
-  if (lwip_netif.mld_mac_filter != NULL) {
-    ip6_addr_t ip6_allnodes_ll;
-    ip6_addr_set_allnodes_linklocal(&ip6_allnodes_ll);
-    lwip_netif.mld_mac_filter(&lwip_netif, &ip6_allnodes_ll, NETIF_ADD_MAC_FILTER);
-  }
+        /*
+         * For hardware/netifs that implement MAC filtering.
+         * All-nodes link-local is handled by default, so we must let the hardware know
+         * to allow multicast packets in.
+         * Should set mld_mac_filter previously. */
+        if (lwip_netif.mld_mac_filter != NULL) {
+            ip6_addr_t ip6_allnodes_ll;
+            ip6_addr_set_allnodes_linklocal(&ip6_allnodes_ll);
+            lwip_netif.mld_mac_filter(&lwip_netif, &ip6_allnodes_ll, NETIF_ADD_MAC_FILTER);
+        }
 #endif /* LWIP_IPV6_MLD */
 
 #if LWIP_IPV6_AUTOCONFIG
-    /* IPv6 address autoconfiguration not enabled by default */
-    lwip_netif.ip6_autoconfig_enabled = 1;
+        /* IPv6 address autoconfiguration not enabled by default */
+        lwip_netif.ip6_autoconfig_enabled = 1;
+    } else {
+        // Disable router solidifications
+        lwip_netif.rs_count = 0;
+    }
 #endif /* LWIP_IPV6_AUTOCONFIG */
 #endif // LWIP_IPV6
 
-
 #if LWIP_IPV4
-    if (!dhcp && !ppp) {
-        ip4_addr_t ip_addr;
-        ip4_addr_t netmask_addr;
-        ip4_addr_t gw_addr;
+    if (stack != IPV6_STACK) {
+        if (!dhcp && !ppp) {
+            ip4_addr_t ip_addr;
+            ip4_addr_t netmask_addr;
+            ip4_addr_t gw_addr;
 
-        if (!inet_aton(ip, &ip_addr) ||
-            !inet_aton(netmask, &netmask_addr) ||
-            !inet_aton(gw, &gw_addr)) {
-            return NSAPI_ERROR_PARAMETER;
+            if (!inet_aton(ip, &ip_addr) ||
+                !inet_aton(netmask, &netmask_addr) ||
+                !inet_aton(gw, &gw_addr)) {
+                return NSAPI_ERROR_PARAMETER;
+            }
+
+            netif_set_addr(&lwip_netif, &ip_addr, &netmask_addr, &gw_addr);
         }
-
-        netif_set_addr(&lwip_netif, &ip_addr, &netmask_addr, &gw_addr);
     }
 #endif
 
@@ -580,7 +735,7 @@ nsapi_error_t mbed_lwip_bringup_2(bool dhcp, bool ppp, const char *ip, const cha
     if (!netif_is_link_up(&lwip_netif)) {
         if (sys_arch_sem_wait(&lwip_netif_linked, 15000) == SYS_ARCH_TIMEOUT) {
             if (ppp) {
-                ppp_lwip_disconnect();
+                (void) ppp_lwip_disconnect();
             }
             return NSAPI_ERROR_NO_CONNECTION;
         }
@@ -591,33 +746,45 @@ nsapi_error_t mbed_lwip_bringup_2(bool dhcp, bool ppp, const char *ip, const cha
     }
 
 #if LWIP_DHCP
-    // Connect to the network
-    lwip_dhcp = dhcp;
+    if (stack != IPV6_STACK) {
+        // Connect to the network
+        lwip_dhcp = dhcp;
 
-    if (lwip_dhcp) {
-        err_t err = dhcp_start(&lwip_netif);
-        if (err) {
-            return NSAPI_ERROR_DHCP_FAILURE;
+        if (lwip_dhcp) {
+            err_t err = dhcp_start(&lwip_netif);
+            if (err) {
+                return NSAPI_ERROR_DHCP_FAILURE;
+            }
         }
     }
 #endif
 
     // If doesn't have address
     if (!mbed_lwip_get_ip_addr(true, &lwip_netif)) {
-        if (sys_arch_sem_wait(&lwip_netif_has_addr, DHCP_TIMEOUT * 1000) == SYS_ARCH_TIMEOUT) {
+        if (sys_arch_sem_wait(&lwip_netif_has_any_addr, DHCP_TIMEOUT * 1000) == SYS_ARCH_TIMEOUT) {
             if (ppp) {
-                ppp_lwip_disconnect();
+                (void) ppp_lwip_disconnect();
             }
-
             return NSAPI_ERROR_DHCP_FAILURE;
         }
     }
 
-#if ADDR_TIMEOUT
-    // If address is not for preferred stack waits a while to see
-    // if preferred stack address is acquired
-    if (!mbed_lwip_get_ip_addr(false, &lwip_netif)) {
-        sys_arch_sem_wait(&lwip_netif_has_addr, ADDR_TIMEOUT * 1000);
+#if PREF_ADDR_TIMEOUT
+    if (stack != IPV4_STACK && stack != IPV6_STACK) {
+        // If address is not for preferred stack waits a while to see
+        // if preferred stack address is acquired
+        if (!mbed_lwip_get_ip_addr(false, &lwip_netif)) {
+            sys_arch_sem_wait(&lwip_netif_has_pref_addr, PREF_ADDR_TIMEOUT * 1000);
+        }
+    }
+#endif
+#if BOTH_ADDR_TIMEOUT
+    if (stack != IPV4_STACK && stack != IPV6_STACK) {
+        // If addresses for both stacks are not available waits a while to
+        // see if address for both stacks are acquired
+        if (!(mbed_lwip_get_ipv4_addr(&lwip_netif) && mbed_lwip_get_ipv6_addr(&lwip_netif))) {
+            sys_arch_sem_wait(&lwip_netif_has_both_addr, BOTH_ADDR_TIMEOUT * 1000);
+        }
     }
 #endif
 
@@ -678,10 +845,17 @@ nsapi_error_t mbed_lwip_bringdown_2(bool ppp)
     mbed_lwip_clear_ipv6_addresses(&lwip_netif);
 #endif
 
-
-    sys_sem_free(&lwip_netif_has_addr);
-    sys_sem_new(&lwip_netif_has_addr, 0);
-
+    sys_sem_free(&lwip_netif_has_any_addr);
+    sys_sem_new(&lwip_netif_has_any_addr, 0);
+#if PREF_ADDR_TIMEOUT
+    sys_sem_free(&lwip_netif_has_pref_addr);
+    sys_sem_new(&lwip_netif_has_pref_addr, 0);
+#endif
+#if BOTH_ADDR_TIMEOUT
+    sys_sem_free(&lwip_netif_has_both_addr);
+    sys_sem_new(&lwip_netif_has_both_addr, 0);
+#endif
+    lwip_has_addr_state = 0;
     lwip_connected = false;
     return 0;
 }
@@ -693,6 +867,7 @@ static nsapi_error_t mbed_lwip_err_remap(err_t err) {
         case ERR_CLSD:
             return 0;
         case ERR_MEM:
+        case ERR_BUF:
             return NSAPI_ERROR_NO_MEMORY;
         case ERR_CONN:
         case ERR_RST:
@@ -727,15 +902,29 @@ static nsapi_error_t mbed_lwip_gethostbyname(nsapi_stack_t *stack, const char *h
     if (version == NSAPI_UNSPEC) {
         const ip_addr_t *ip_addr;
         ip_addr = mbed_lwip_get_ip_addr(true, &lwip_netif);
+        // Prefer IPv6
         if (IP_IS_V6(ip_addr)) {
-            addr_type = NETCONN_DNS_IPV6;
+            // If IPv4 is available use it as backup
+            if (mbed_lwip_get_ipv4_addr(&lwip_netif)) {
+                addr_type = NETCONN_DNS_IPV6_IPV4;
+            } else {
+                addr_type = NETCONN_DNS_IPV6;
+            }
+        // Prefer IPv4
         } else {
-            addr_type = NETCONN_DNS_IPV4;
+            // If IPv6 is available use it as backup
+            if (mbed_lwip_get_ipv6_addr(&lwip_netif)) {
+                addr_type = NETCONN_DNS_IPV4_IPV6;
+            } else {
+                addr_type = NETCONN_DNS_IPV4;
+            }
         }
     } else if (version == NSAPI_IPv4) {
         addr_type = NETCONN_DNS_IPV4;
     } else if (version == NSAPI_IPv6) {
         addr_type = NETCONN_DNS_IPV6;
+    } else {
+        return NSAPI_ERROR_DNS_FAILURE;
     }
     err_t err = netconn_gethostbyname_addrtype(host, &lwip_addr, addr_type);
 #elif LWIP_IPV4
@@ -790,19 +979,8 @@ static nsapi_error_t mbed_lwip_socket_open(nsapi_stack_t *stack, nsapi_socket_t 
 
     enum netconn_type lwip_proto = proto == NSAPI_TCP ? NETCONN_TCP : NETCONN_UDP;
 
-#if LWIP_IPV6 && LWIP_IPV4
-    const ip_addr_t *ip_addr;
-    ip_addr = mbed_lwip_get_ip_addr(true, &lwip_netif);
-
-    if (IP_IS_V6(ip_addr)) {
-        // Enable IPv6 (or dual-stack). LWIP dual-stack support is
-        // currently incomplete as of 2.0.0rc2 - eg we will only be able
-        // to do a UDP sendto to an address matching the type selected
-        // here. Matching "get_ip_addr" and DNS logic, use v4 if
-        // available.
-        lwip_proto |= NETCONN_TYPE_IPV6;
-    }
-#elif LWIP_IPV6
+#if LWIP_IPV6
+    // Enable IPv6 (or dual-stack)
     lwip_proto |= NETCONN_TYPE_IPV6;
 #endif
 
@@ -845,6 +1023,10 @@ static nsapi_error_t mbed_lwip_socket_bind(nsapi_stack_t *stack, nsapi_socket_t 
         return NSAPI_ERROR_PARAMETER;
     }
 
+    if (!ip_addr_isany(&ip_addr) && !mbed_lwip_is_local_addr(&ip_addr)) {
+        return NSAPI_ERROR_PARAMETER;
+    }
+
     err_t err = netconn_bind(s->conn, &ip_addr, port);
     return mbed_lwip_err_remap(err);
 }
@@ -852,6 +1034,10 @@ static nsapi_error_t mbed_lwip_socket_bind(nsapi_stack_t *stack, nsapi_socket_t 
 static nsapi_error_t mbed_lwip_socket_listen(nsapi_stack_t *stack, nsapi_socket_t handle, int backlog)
 {
     struct lwip_socket *s = (struct lwip_socket *)handle;
+
+    if (s->conn->pcb.tcp->local_port == 0) {
+        return NSAPI_ERROR_PARAMETER;
+    }
 
     err_t err = netconn_listen_with_backlog(s->conn, backlog);
     return mbed_lwip_err_remap(err);
@@ -879,6 +1065,10 @@ static nsapi_error_t mbed_lwip_socket_accept(nsapi_stack_t *stack, nsapi_socket_
     struct lwip_socket *ns = mbed_lwip_arena_alloc();
     if (!ns) {
         return NSAPI_ERROR_NO_SOCKET;
+    }
+
+    if (s->conn->pcb.tcp->state != LISTEN) {
+        return NSAPI_ERROR_PARAMETER;
     }
 
     err_t err = netconn_accept(s->conn, &ns->conn);
@@ -980,6 +1170,24 @@ static nsapi_size_or_error_t mbed_lwip_socket_recvfrom(nsapi_stack_t *stack, nsa
     return recv;
 }
 
+static int32_t find_multicast_member(const struct lwip_socket *s, const nsapi_ip_mreq_t *imr) {
+    uint32_t count = 0;
+    uint32_t index = 0;
+    // Set upper limit on while loop, should break out when the membership pair is found
+    while (count < s->multicast_memberships_count) {
+        index = next_registered_multicast_member(s, index);
+
+        if (memcmp(&s->multicast_memberships[index].imr_multiaddr, &imr->imr_multiaddr, sizeof(nsapi_addr_t)) == 0 &&
+           memcmp(&s->multicast_memberships[index].imr_interface, &imr->imr_interface, sizeof(nsapi_addr_t)) == 0) {
+            return index;
+        }
+        count++;
+        index++;
+    }
+
+    return -1;
+}
+
 static nsapi_error_t mbed_lwip_setsockopt(nsapi_stack_t *stack, nsapi_socket_t handle, int level, int optname, const void *optval, unsigned optlen)
 {
     struct lwip_socket *s = (struct lwip_socket *)handle;
@@ -1022,6 +1230,103 @@ static nsapi_error_t mbed_lwip_setsockopt(nsapi_stack_t *stack, nsapi_socket_t h
                 ip_reset_option(s->conn->pcb.ip, SOF_REUSEADDR);
             }
             return 0;
+
+        case NSAPI_ADD_MEMBERSHIP:
+        case NSAPI_DROP_MEMBERSHIP: {
+            if (optlen != sizeof(nsapi_ip_mreq_t)) {
+                return NSAPI_ERROR_PARAMETER;
+            }
+            err_t igmp_err;
+            const nsapi_ip_mreq_t *imr = optval;
+
+            /* Check interface address type matches group, or is unspecified */
+            if (imr->imr_interface.version != NSAPI_UNSPEC && imr->imr_interface.version != imr->imr_multiaddr.version) {
+                return NSAPI_ERROR_PARAMETER;
+            }
+
+            ip_addr_t if_addr;
+            ip_addr_t multi_addr;
+
+            /* Convert the group address */
+            if (!convert_mbed_addr_to_lwip(&multi_addr, &imr->imr_multiaddr)) {
+                return NSAPI_ERROR_PARAMETER;
+            }
+
+            /* Convert the interface address, or make sure it's the correct sort of "any" */
+            if (imr->imr_interface.version != NSAPI_UNSPEC) {
+                if (!convert_mbed_addr_to_lwip(&if_addr, &imr->imr_interface)) {
+                    return NSAPI_ERROR_PARAMETER;
+                }
+            } else {
+                ip_addr_set_any(IP_IS_V6(&if_addr), &if_addr);
+            }
+
+            igmp_err = ERR_USE; // Maps to NSAPI_ERROR_UNSUPPORTED
+            int32_t member_pair_index = find_multicast_member(s, imr);
+
+            if (optname == NSAPI_ADD_MEMBERSHIP) {
+                if (!s->multicast_memberships) {
+                    // First multicast join on this socket, allocate space for membership tracking
+                    s->multicast_memberships = malloc(sizeof(nsapi_ip_mreq_t) * LWIP_SOCKET_MAX_MEMBERSHIPS);
+                    if (!s->multicast_memberships) {
+                        return NSAPI_ERROR_NO_MEMORY;
+                    }
+                } else if(s->multicast_memberships_count == LWIP_SOCKET_MAX_MEMBERSHIPS) {
+                    return NSAPI_ERROR_NO_MEMORY;
+                }
+
+                if (member_pair_index != -1) {
+                    return NSAPI_ERROR_ADDRESS_IN_USE;
+                }
+
+                member_pair_index = next_free_multicast_member(s, 0);
+
+                sys_prot_t prot = sys_arch_protect();
+
+                #if LWIP_IPV4
+                if (IP_IS_V4(&if_addr)) {
+                    igmp_err = igmp_joingroup(ip_2_ip4(&if_addr), ip_2_ip4(&multi_addr));
+                }
+                #endif
+                #if LWIP_IPV6
+                if (IP_IS_V6(&if_addr)) {
+                    igmp_err = mld6_joingroup(ip_2_ip6(&if_addr), ip_2_ip6(&multi_addr));
+                }
+                #endif
+
+                sys_arch_unprotect(prot);
+
+                if (igmp_err == ERR_OK) {
+                    set_multicast_member_registry_bit(s, member_pair_index);
+                    s->multicast_memberships[member_pair_index] = *imr;
+                    s->multicast_memberships_count++;
+                }
+            } else {
+                if (member_pair_index == -1) {
+                    return NSAPI_ERROR_NO_ADDRESS;
+                }
+
+                clear_multicast_member_registry_bit(s, member_pair_index);
+                s->multicast_memberships_count--;
+
+                sys_prot_t prot = sys_arch_protect();
+
+                #if LWIP_IPV4
+                if (IP_IS_V4(&if_addr)) {
+                    igmp_err = igmp_leavegroup(ip_2_ip4(&if_addr), ip_2_ip4(&multi_addr));
+                }
+                #endif
+                #if LWIP_IPV6
+                if (IP_IS_V6(&if_addr)) {
+                    igmp_err = mld6_leavegroup(ip_2_ip6(&if_addr), ip_2_ip6(&multi_addr));
+                }
+                #endif
+
+                sys_arch_unprotect(prot);
+            }
+
+            return mbed_lwip_err_remap(igmp_err);
+         }
 
         default:
             return NSAPI_ERROR_UNSUPPORTED;

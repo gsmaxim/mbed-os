@@ -277,9 +277,11 @@ void spi_init(spi_t *obj,
         }
     }
 
-    for (i = 0; i < SPI_COUNT; ++i) {
+    for (i = SPI_COUNT - 1; i >= 0; i--) {
         spi_info_t *p_spi_info = &m_spi_info[i];
+
         if (!p_spi_info->initialized) {
+
             p_spi_info->sck_pin   = (uint8_t)sclk;
             p_spi_info->mosi_pin  = (mosi != NC) ?
                 (uint8_t)mosi : NRF_DRV_SPI_PIN_NOT_USED;
@@ -289,8 +291,6 @@ void spi_init(spi_t *obj,
                 (uint8_t)ssel : NRF_DRV_SPI_PIN_NOT_USED;
             p_spi_info->spi_mode  = (uint8_t)NRF_DRV_SPI_MODE_0;
             p_spi_info->frequency = NRF_DRV_SPI_FREQ_1M;
-
-            NVIC_SetVector(spi_handler_desc[i].IRQn, spi_handler_desc[i].vector);
 
             // By default each SPI instance is initialized to work as a master.
             // Should the slave mode be used, the instance will be reconfigured
@@ -305,11 +305,11 @@ void spi_init(spi_t *obj,
                 p_spi_info->initialized = true;
                 p_spi_info->master      = true;
                 p_spi_info->flag.busy   = false;
-            #if DEVICE_SPI_ASYNCH
+#if DEVICE_SPI_ASYNCH
                 p_spi_info->handler     = 0;
-            #endif
+#endif
                 SPI_IDX(obj) = i;
-
+                NVIC_SetVector(spi_handler_desc[i].IRQn, spi_handler_desc[i].vector);
                 return;
             }
         }
@@ -487,11 +487,12 @@ int spi_master_write(spi_t *obj, int value)
     return p_spi_info->rx_buf;
 }
 
-int spi_master_block_write(spi_t *obj, const char *tx_buffer, int tx_length, char *rx_buffer, int rx_length) {
+int spi_master_block_write(spi_t *obj, const char *tx_buffer, int tx_length,
+                           char *rx_buffer, int rx_length, char write_fill) {
     int total = (tx_length > rx_length) ? tx_length : rx_length;
 
     for (int i = 0; i < total; i++) {
-        char out = (i < tx_length) ? tx_buffer[i] : 0xff;
+        char out = (i < tx_length) ? tx_buffer[i] : write_fill;
         char in = spi_master_write(obj, out);
         if (i < rx_length) {
             rx_buffer[i] = in;

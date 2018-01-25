@@ -116,6 +116,12 @@ struct flash_s {
     uint32_t dummy;
 };
 
+struct analogin_s {
+    ADC_HandleTypeDef handle;
+    PinName pin;
+    uint8_t channel;
+};
+
 #include "gpio_object.h"
 
 struct dac_s {
@@ -127,6 +133,14 @@ struct dac_s {
 
 #ifdef __cplusplus
 }
+#endif
+
+#if DEVICE_CAN
+struct can_s {
+    CAN_HandleTypeDef CanHandle;
+    int index;
+    int hz;
+};
 #endif
 
 /* STM32L4 HAL doesn't provide this API called in rtc_api.c */

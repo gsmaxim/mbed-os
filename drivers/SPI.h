@@ -143,10 +143,21 @@ public:
      */
     virtual void unlock(void);
 
+    /** Set default write data
+      * SPI requires the master to send some data during a read operation.
+      * Different devices may require different default byte values.
+      * For example: A SD Card requires default bytes to be 0xFF.
+      *
+      * @param data    Default character to be transmitted while read operation
+      */
+    void set_default_write_value(char data);
+
 #if DEVICE_SPI_ASYNCH
 
     /** Start non-blocking SPI transfer using 8bit buffers.
      *
+     * This function locks the deep sleep until any event has occured
+     * 
      * @param tx_buffer The TX buffer with data to be transfered. If NULL is passed,
      *                  the default SPI value is sent
      * @param tx_length The length of TX buffer in bytes
@@ -235,6 +246,14 @@ protected:
     */
     void start_transfer(const void *tx_buffer, int tx_length, void *rx_buffer, int rx_length, unsigned char bit_width, const event_callback_t& callback, int event);
 
+private:
+    /** Lock deep sleep only if it is not yet locked */
+    void lock_deep_sleep();
+
+    /** Unlock deep sleep in case it is locked */
+    void unlock_deep_sleep();
+
+
 #if TRANSACTION_QUEUE_SIZE_SPI
 
     /** Start a new transaction
@@ -263,6 +282,7 @@ protected:
     CThunk<SPI> _irq;
     event_callback_t _callback;
     DMAUsage _usage;
+    bool _deep_sleep_locked;
 #endif
 
     void aquire(void);
@@ -271,6 +291,7 @@ protected:
     int _bits;
     int _mode;
     int _hz;
+    char _write_fill;
 
 private:
     /* Private acquire function without locking/unlocking

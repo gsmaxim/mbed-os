@@ -54,22 +54,11 @@ struct port_s {
     __IO uint32_t *reg_out;
 };
 
-struct analogin_s {
-    ADCName adc;
-    PinName pin;
-    uint8_t channel;
-};
-
 struct trng_s {
     RNG_HandleTypeDef handle;
 };
 
 #include "common_objects.h"
-struct can_s {
-    CANName can;
-    int index;
-};
-
 #include "gpio_object.h"
 
 #ifdef __cplusplus

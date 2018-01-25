@@ -24,7 +24,7 @@
 
 #include <stdint.h>
 #include "cmsis_os2.h"
-#include "rtx_lib.h"
+#include "mbed_rtos_storage.h"
 #include "platform/Callback.h"
 #include "platform/NonCopyable.h"
 #include "platform/mbed_toolchain.h"
@@ -33,7 +33,11 @@
 namespace rtos {
 /** \addtogroup rtos */
 /** @{*/
-
+/**
+ * \defgroup rtos_RtosTimer RtosTimer class
+ * @{
+ */
+ 
 /** The RtosTimer class allow creating and and controlling of timer functions in the system.
  A timer function is called when a time period expires whereby both on-shot and
  periodic timers are possible. A timer can be started, restarted, or stopped.
@@ -89,6 +93,8 @@ public:
       @deprecated Replaced with RtosTimer(Callback<void()>, os_timer_type)
       @deprecated
           The RtosTimer has been superseded by the EventQueue. See RtosTimer.h for more details
+
+      @note You cannot call this function from ISR context.
      */
     MBED_DEPRECATED_SINCE("mbed-os-5.1",
         "Replaced with RtosTimer(Callback<void()>, os_timer_type)")
@@ -103,6 +109,8 @@ public:
       @param   type      osTimerOnce for one-shot or osTimerPeriodic for periodic behaviour. (default: osTimerPeriodic)
       @deprecated
           The RtosTimer has been superseded by the EventQueue. See RtosTimer.h for more details
+
+      @note You cannot call this function from ISR context.
     */
     MBED_DEPRECATED_SINCE("mbed-os-5.2",
         "The RtosTimer has been superseded by the EventQueue. See RtosTimer.h for more details")
@@ -119,6 +127,8 @@ public:
           RtosTimer(callback(obj, method), os_timer_type).
       @deprecated
           The RtosTimer has been superseded by the EventQueue. See RtosTimer.h for more details
+
+      @note You cannot call this function from ISR context.
     */
     template <typename T, typename M>
     MBED_DEPRECATED_SINCE("mbed-os-5.1",
@@ -131,16 +141,32 @@ public:
     }
 
     /** Stop the timer.
-      @return  status code that indicates the execution status of the function.
+      @return  status code that indicates the execution status of the function:
+          @a osOK the timer has been stopped.
+          @a osErrorISR @a stop cannot be called from interrupt service routines.
+          @a osErrorParameter internal error.
+          @a osErrorResource the timer is not running.
+
+      @note You cannot call this function from ISR context.
     */
     osStatus stop(void);
 
-    /** Start the timer.
-      @param   millisec  time delay value of the timer.
-      @return  status code that indicates the execution status of the function.
+    /** Start or restart the timer.
+      @param   millisec  non-zero value of the timer.
+      @return  status code that indicates the execution status of the function:
+          @a osOK the timer has been started or restarted.
+          @a osErrorISR @a start cannot be called from interrupt service routines.
+          @a osErrorParameter internal error or incorrect parameter value.
+          @a osErrorResource internal error (the timer is in an invalid timer state).
+
+      @note You cannot call this function from ISR context.
     */
     osStatus start(uint32_t millisec);
 
+    /** RtosTimer destructor
+     *
+     * @note You cannot call this function from ISR context.
+     */
     ~RtosTimer();
 
 private:
@@ -149,13 +175,14 @@ private:
     void constructor(mbed::Callback<void()> func, os_timer_type type);
 
     osTimerId_t _id;
-    osTimerAttr_t _attr;
-    os_timer_t _obj_mem;
+    mbed_rtos_storage_timer_t _obj_mem;
     mbed::Callback<void()> _function;
 };
+/** @}*/
+/** @}*/
 
 }
 
 #endif
 
-/** @}*/
+

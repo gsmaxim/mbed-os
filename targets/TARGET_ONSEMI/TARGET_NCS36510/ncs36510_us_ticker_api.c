@@ -128,6 +128,12 @@ uint32_t us_ticker_read()
     return retval;
 }
 
+void us_ticker_fire_interrupt(void)
+{
+    us_ticker_target = 0;
+    NVIC_SetPendingIRQ(Tim1_IRQn);
+}
+
 /*******************************************************************************
  * Event Timer
  *
