@@ -33,22 +33,26 @@
 
 #include "cmsis.h"
 #include "ioman_regs.h"
+#include "pwrman_regs.h"
 #include "gpio_regs.h"
 
 //******************************************************************************
 // This function will get called early in system initialization
 void low_level_init(void)
 {
-    /* The MAX32625PICO board utilizes a bootloader that can leave some
-     * peripherals in a partially configured state.  This function resets
-     * those to allow proper initialization.
+    /* If you are using the MAX32620FTHR board with the bootloader it can
+     * leave some peripherals in a partially configured state.  This function
+     * resets those to allow proper initialization.
      */
-    MXC_IOMAN->uart0_req = 0x0;         // Clear any requests
-    MXC_IOMAN->uart1_req = 0x0;         // Clear any requests
 
-    MXC_GPIO->inten[2] = 0x0;           // Clear interrupt enable
-    MXC_GPIO->int_mode[2] = 0x0;        // Clear interrupt mode
-    MXC_GPIO->in_mode[2] = 0x22222222;  // Clear input mode
-    MXC_GPIO->out_val[2] = 0x0;         // Clear output value
-    MXC_GPIO->out_mode[2] = 0xFFFFFFFF; // Clear output mode
+    // Reset GPIO
+    MXC_PWRMAN->peripheral_reset |= MXC_F_PWRMAN_PERIPHERAL_RESET_GPIO;
+    MXC_PWRMAN->peripheral_reset &= ~MXC_F_PWRMAN_PERIPHERAL_RESET_GPIO;
+
+    // Clear UART3 I/O mode request
+    MXC_IOMAN->uart3_req = 0x0;
+
+    // Reset UART3
+    MXC_PWRMAN->peripheral_reset |= MXC_F_PWRMAN_PERIPHERAL_RESET_UART3;
+    MXC_PWRMAN->peripheral_reset &= ~MXC_F_PWRMAN_PERIPHERAL_RESET_UART3;
 }
